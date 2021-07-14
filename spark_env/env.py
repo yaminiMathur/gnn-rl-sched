@@ -158,8 +158,7 @@ class Environment(object):
 
     def observe(self):
         return self.job_dags, self.source_job, self.num_source_exec, \
-               self.get_frontier_nodes(), self.get_executor_limits(), \
-               self.exec_commit, self.moving_executors, self.action_map
+               self.exec_commit, self.moving_executors
 
     def saturated(self, node):
         # frontier nodes := unsaturated nodes with all parent nodes saturated
@@ -402,8 +401,9 @@ class Environment(object):
         return G
 
     def new_observation(self):
-        return self.generate_job_graph(), self.get_frontier_nodes(), self.get_executor_limits(), \
-               self.generate_exec_graph(), self.action_map
+        return self.generate_job_graph(), self.get_frontier_nodes(), self.num_source_exec, \
+               self.action_map, self.job_dags, self.source_job, self.num_source_exec, \
+               self.exec_commit, self.moving_executors
 
     def new_step(self, next_node, limit):
 
