@@ -15,7 +15,10 @@ from spark_env.executor import Executor
 from spark_env.job_dag import JobDAG
 from spark_env.task import Task
 import networkx as nx
+from spark_env.node import *
 
+import dgl
+import torch
 
 class Environment(object):
     def __init__(self):
@@ -49,10 +52,16 @@ class Environment(object):
         # for computing reward at each step
         self.reward_calculator = RewardCalculator()
 
-    def add_job(self, job_dag):
+        # create a newworkx graph
+        self.G = None
+
+    def add_job(self, job_dag, generate=True):
         self.moving_executors.add_job(job_dag)
         self.free_executors.add_job(job_dag)
         self.exec_commit.add_job(job_dag)
+
+        if generate:
+            self.generate_job_graph()
 
     def assign_executor(self, executor, frontier_changed):
         if executor.node is not None and not executor.node.no_more_tasks:
@@ -355,6 +364,7 @@ class Environment(object):
         self.job_dags.remove(job_dag)
         self.finished_job_dags.add(job_dag)
         self.action_map = compute_act_map(self.job_dags)
+        self.generate_job_graph()
 
     def reset(self, max_time=np.inf):
         self.max_time = max_time
@@ -375,7 +385,8 @@ class Environment(object):
         self.action_map = compute_act_map(self.job_dags)
         # add initial set of jobs in the system
         for job_dag in self.job_dags:
-            self.add_job(job_dag)
+            self.add_job(job_dag, False)
+        self.generate_job_graph()
         # put all executors as source executors initially
         self.source_job = None
         self.num_source_exec = len(self.executors)
@@ -386,6 +397,7 @@ class Environment(object):
 
     def generate_exec_graph(self):
         G = nx.DiGraph()
+        print("called")
         for executor in self.executors:
             if executor in self.moving_executors:
                 continue
@@ -396,14 +408,22 @@ class Environment(object):
 
     def generate_job_graph(self):
         G = nx.DiGraph()
+        offset = 0
         for job_dag in self.job_dags:
-            G = nx.disjoint_union(G, job_dag.get_networkx())
-        return G
+            for i in range(job_dag.num_nodes):
+                for j in range(job_dag.num_nodes):
+                    if job_dag.adj_mat[i][j] == 1:
+                        G.add_edge(offset+j, offset+i)
+            offset += job_dag.num_nodes   
+
+        self.G = dgl.from_networkx(G)
+        self.G = dgl.add_self_loop(self.G)
+        return G            
 
     def new_observation(self):
-        return self.generate_job_graph(), self.get_frontier_nodes(), self.num_source_exec, \
-               self.action_map, self.job_dags, self.source_job, self.num_source_exec, \
-               self.exec_commit, self.moving_executors
+        node_inputs = self.translate_state(self.job_dags, self.source_job, self.num_source_exec, self.exec_commit, self.moving_executors)
+        return self.G, self.get_frontier_nodes(), self.num_source_exec, \
+               self.action_map, torch.tensor(node_inputs).type(torch.FloatTensor)
 
     def new_step(self, next_node, limit):
 
@@ -529,4 +549,77 @@ class Environment(object):
             assert self.wall_time.curr_time >= self.max_time or \
                    len(self.job_dags) == 0
 
-        return self.new_observation(), reward, done
+        return reward, done
+
+    def translate_state(self, job_dags, source_job, num_source_exec, exec_commit, moving_executors, node_input_dim=5, job_input_dim=3):
+        """
+        Translate the observation to matrix form
+        """
+
+        # compute total number of nodes
+        total_num_nodes = int(np.sum([job_dag.num_nodes for job_dag in job_dags]))
+
+        # job and node inputs to feed
+        node_inputs = np.zeros([total_num_nodes, node_input_dim])
+        job_inputs = np.zeros([len(job_dags), job_input_dim])
+
+        # sort out the exec_map
+        exec_map = {}
+        for job_dag in job_dags:
+            exec_map[job_dag] = len(job_dag.executors)
+        # count in moving executors
+        for node in moving_executors.moving_executors.values():
+            exec_map[node.job_dag] += 1
+        # count in executor commit
+        for s in exec_commit.commit:
+            if isinstance(s, JobDAG):
+                j = s
+            elif isinstance(s, Node):
+                j = s.job_dag
+            elif s is None:
+                j = None
+            else:
+                print('source', s, 'unknown')
+                exit(1)
+            for n in exec_commit.commit[s]:
+                if n is not None and n.job_dag != j:
+                    exec_map[n.job_dag] += exec_commit.commit[s][n]
+
+        # gather job level inputs
+        job_idx = 0
+        for job_dag in job_dags:
+            # number of executors in the job
+            job_inputs[job_idx, 0] = exec_map[job_dag] / 20.0
+            # the current executor belongs to this job or not
+            if job_dag is source_job:
+                job_inputs[job_idx, 1] = 2
+            else:
+                job_inputs[job_idx, 1] = -2
+            # number of source executors
+            job_inputs[job_idx, 2] = num_source_exec / 20.0
+
+            job_idx += 1
+
+        # gather node level inputs
+        node_idx = 0
+        job_idx = 0
+        for job_dag in job_dags:
+            for node in job_dag.nodes:
+
+                # copy the feature from job_input first
+                node_inputs[node_idx, :3] = job_inputs[job_idx, :3]
+
+                # work on the node
+                node_inputs[node_idx, 3] = \
+                    (node.num_tasks - node.next_task_idx) * \
+                    node.tasks[-1].duration / 100000.0
+
+                # number of tasks left
+                node_inputs[node_idx, 4] = \
+                    (node.num_tasks - node.next_task_idx) / 200.0
+
+                node_idx += 1
+
+            job_idx += 1
+
+        return node_inputs

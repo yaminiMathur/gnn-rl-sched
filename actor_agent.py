@@ -465,6 +465,7 @@ class ActorAgent(Agent):
         return node_valid_mask, job_valid_mask
 
     def invoke_model(self, obs):
+        
         # implement this module here for training
         # (to pick up state and action to record)
         node_inputs, job_inputs, \

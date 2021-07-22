@@ -121,20 +121,12 @@ class JobDAG(object):
     def get_networkx(self):
 
         row_len = len(self.adj_mat)  
-        G = nx.DiGraph()   
-        map = {}   
-
-
-        for i, node in enumerate(self.nodes):
-            G.add_node(node.idx)
-            map[i] = node.idx
+        G = nx.DiGraph()
 
         for i in range(row_len):
             for j in range(row_len):
-                loc_i = map[i]
-                loc_j = map[j]
                 if self.adj_mat[i][j] == 1:
-                    G.add_edge(loc_j, loc_i)
+                    G.add_edge(j, i)
         
         return G
             
