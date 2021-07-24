@@ -436,12 +436,16 @@ class Environment(object):
 
         # compute number of valid executors to assign
         if next_node is not None:
-            use_exec = min(next_node.num_tasks - next_node.next_task_idx - \
+            calc = max(next_node.num_tasks - next_node.next_task_idx - \
                            self.exec_commit.node_commit[next_node] - \
-                           self.moving_executors.count(next_node), limit)
+                           self.moving_executors.count(next_node), 1)
+            use_exec = min(calc, limit)
+            # problem
         else:
             use_exec = limit
         assert use_exec > 0
+
+        use_exec = min(use_exec, self.num_source_exec)
 
         self.exec_commit.add(source, next_node, use_exec)
         # deduct the executors that know the destination
@@ -541,11 +545,11 @@ class Environment(object):
             self.job_dags, self.wall_time.curr_time)
 
         # no more decision to make, jobs all done or time is up
-        done = (self.num_source_exec == 0) and \
-               ((len(self.timeline) == 0) or \
-               (self.wall_time.curr_time >= self.max_time))
+        done = ((self.num_source_exec == 0 and len(self.timeline) == 0) or \
+               self.wall_time.curr_time >= self.max_time)
 
         if done:
+            print(len(self.job_dags))
             assert self.wall_time.curr_time >= self.max_time or \
                    len(self.job_dags) == 0
 

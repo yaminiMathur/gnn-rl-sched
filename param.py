@@ -152,14 +152,14 @@ class Args() :
         self.moving_delay = 2000
         self.query_type = 'tpch' # 'alibaba'
         self.executor_data_point = [5, 10, 20, 40, 50, 60, 80, 100]
-        self.num_init_dags = 10
+        self.num_init_dags = 1
         self.tpch_num = 22
         self.tpch_size = ['2g','5g','10g','20g','50g','80g','100g']
         self.job_folder = './spark_env/tpch/'
         self.num_stream_dags = 100
         self.num_stream_dags_max = 500
         self.num_stream_dags_grow = 0.2
-        self.stream_interval = 25000
+        self.stream_interval = 1 # 25000
         self.warmup_delay =1000
         self.learn_obj = 'mean' # makespan
         self.reward_scale = 100000.0
