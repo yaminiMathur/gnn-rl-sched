@@ -52,8 +52,7 @@ class Net(nn.Module):
         else :
             logits = self.target(graph, node_input)
 
-        return logits
-        
+        return logits  
 
 class Agent():
 
@@ -65,7 +64,7 @@ class Agent():
         self.net = self.net.to(device)
 
         self.exploration_rate = 1
-        self.exploration_rate_decay =  0.9975 # 0.99999975
+        self.exploration_rate_decay = 0.9999975
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
@@ -76,12 +75,12 @@ class Agent():
 
         self.gamma = 0.9
 
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.0025)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
-        self.burnin = 1e3  # min. experiences before training
-        self.learn_every = 3  # no. of experiences between updates to Q_online
-        self.sync_every = 1e3  # no. of experiences between Q_target & Q_online sync
+        self.burnin = 1e4      # min. experiences before training
+        self.learn_every = 3   # no. of experiences between updates to Q_online
+        self.sync_every = 1e4  # no. of experiences between Q_target & Q_online sync
 
         self.assist = assist
         self.assist_range = assist_p
@@ -90,9 +89,6 @@ class Agent():
     def act(self, state, parallelism=1):
         
         G, node_inputs, leaf_nodes = state
-
-        if len(leaf_nodes) == 0:
-            return 0
         
         # EXPLORE
         if np.random.rand() < self.exploration_rate:
@@ -166,28 +162,28 @@ class Agent():
 
         # calculate the logits for online model
         logits = self.net(next_state, node_inputs, model="online")
-        logits = logits.detach().to("cpu")
+        logits = logits.detach()
 
         # seperate the actions per graph
-        for i, leafs in leaf_nodes:
-            if len(leafs) == 0:
-                reward_indices += 1
-                prev = i
-                continue
-            req = logits[prev:i, :][leafs]
+        for i, leaves in leaf_nodes:
+            # if len(leafs) == 0:
+            #     reward_indices += 1
+            #     prev = i
+            #     continue
+            req = logits[prev:i, :][leaves]
             index = torch.argmax(req).item()
-            indices.append(leafs[index]+prev)
+            indices.append(leaves[index]+prev)
             prev = i
             action_values.append(reward_indices)
             reward_indices += 1
 
         # calculate the next Q values
         next_Q = self.net(next_state, node_inputs, model="target")[indices]
-        values = torch.zeros(len(reward)).to(device)
-        values[action_values] = next_Q.flatten()
-        values = values.reshape(32, 1)
+        # values = torch.zeros(len(reward)).to(device)
+        # values[action_values] = next_Q.flatten()
+        # values = values.reshape(32, 1)
 
-        return (reward + (1 - done.float()) * self.gamma * values).float()
+        return (reward + (1 - done.float()) * self.gamma * next_Q).float() # values).float()
 
     def update_Q_batch(self, td_estimate, td_target):
         loss = self.loss_fn(td_estimate, td_target)
@@ -208,7 +204,7 @@ class Agent():
 
     def save(self):
         save_path = (
-            self.save_dir + f"/sched_net_{int(self.curr_step // self.save_every)}.chkpt"
+            self.save_dir + f"/sched_net_{int(self.curr_step // self.save_every)}.pt"
         )
         torch.save(
             dict(model=self.net.state_dict(), exploration_rate=self.exploration_rate),
@@ -263,23 +259,27 @@ class Agent():
         for sample in memory:
             state, next_state, action, reward, done = sample
 
-            # actions have to before length is increased
-            actions.append(action + length_current)            
-            length_current += state[0].number_of_nodes()
+            # unpack the state
+            graph, node_inputs, leaf_nodes = state
+            next_graph, next_node_input, next_leaves = next_state
+
+            # actions have to be appended before length is increased
+            actions.append(action + length_current)
+            length_current += graph.number_of_nodes()
 
             # append values to respective lists to create batches
-            graphs.append(state[0])
-            node_input_list.append(state[1])
+            graphs.append(graph)
+            node_input_list.append(node_inputs)
             rewards.append(reward)
             done_list.append(done)
 
             # set the length of the nodes to be used for next_state
-            length_next += next_state[0].number_of_nodes()
+            length_next += next_graph.number_of_nodes()
 
             # append values to lists to create next_state
-            next_graphs.append(next_state[0])
-            next_node_inputs.append(next_state[1])
-            next_leaf_nodes.append((length_next, next_state[2]))
+            next_graphs.append(next_graph)
+            next_node_inputs.append(next_node_input)
+            next_leaf_nodes.append((length_next, next_leaves))
 
         # create tensors to train as batches
         batch_state = (dgl.batch(graphs).to(device), torch.cat(node_input_list).to(device))
@@ -309,7 +309,7 @@ class Agent():
         td_est = self.td_estimate_batch(state, actions)
 
         # Get TD Target
-        td_tgt = torch.rand(32).to(device).reshape(32, 1) #self.td_target_batch(rewards, next_state, done)
+        td_tgt = self.td_target_batch(rewards, next_state, done)
         
         # get the loss function
         loss = self.update_Q_batch(td_est, td_tgt)

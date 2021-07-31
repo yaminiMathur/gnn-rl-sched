@@ -201,12 +201,20 @@ class Environment(object):
         return executor_limit
 
     def observe(self):
-        node_inputs = self.translate_state()
         self.get_frontier_nodes()
+        node_inputs = self.translate_state()
+        frontier_indices = self.frontier_indices
         assert len(self.G.nodes()) == len(node_inputs)
         g = dgl.from_networkx(self.G)
+
+        if len(self.frontier_indices) == 0 or g.number_of_nodes() == 0:
+            g.add_nodes(1) 
+            node_inputs = torch.cat([node_inputs, torch.tensor([[-1,-1,-1,-1,-1]]).to(args.cuda)]).to(args.cuda)
+            frontier_indices.append(0)
+
         g = dgl.add_self_loop(g).to(args.cuda)
-        return g, self.frontier_nodes, self.frontier_indices, self.num_source_exec, node_inputs
+        assert g.number_of_nodes() == len(node_inputs)
+        return g, self.frontier_nodes, frontier_indices, self.num_source_exec, node_inputs
 
     def saturated(self, node):
         # frontier nodes := unsaturated nodes with all parent nodes saturated

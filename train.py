@@ -44,7 +44,7 @@ for e in range(episodes):
         agent.cache(state, next_state, action, reward, done)
 
         # Learn
-        q, loss = agent.learn()
+        q, loss = agent.learn_batch()
 
         # Logging
         logger.log_step(reward, loss, q)
