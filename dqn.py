@@ -56,7 +56,7 @@ class Net(nn.Module):
 
 class Agent():
 
-    def __init__(self, save_dir=".", assist=True, assist_p=(1, 7)):
+    def __init__(self, save_dir="./models", assist=True, assist_p=(1, 7)):
         self.save_dir = save_dir
 
         # DNN to predict the most optimal action
@@ -317,8 +317,8 @@ class Agent():
         return td_est.flatten().mean().item(), loss
 
 class MetricLogger:
-    def __init__(self, save_dir="."):
-        self.save_log = save_dir + "/log"
+    def __init__(self, save_dir="./results"):
+        self.save_log = save_dir + "/episodes.log"
         with open(self.save_log, "w") as f:
             f.write(
                 f"{'Episode':>8}{'Step':>8}{'Epsilon':>10}{'MeanReward':>15}"
