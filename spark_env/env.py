@@ -1,10 +1,7 @@
-from matplotlib import use
 import numpy as np
 import copy
 from collections import OrderedDict
-
-from torch import cuda
-from param import args
+from param import *
 from utils import *
 from spark_env.action_map import compute_act_map, get_frontier_acts
 from spark_env.reward_calculator import RewardCalculator
@@ -17,10 +14,10 @@ from spark_env.timeline import Timeline
 from spark_env.executor import Executor
 from spark_env.job_dag import JobDAG
 from spark_env.task import Task
-import networkx as nx
-from spark_env.node import *
+from spark_env.node import Node
 
 import dgl
+import networkx as nx
 import torch
 
 class Environment(object):
@@ -56,12 +53,10 @@ class Environment(object):
         # for computing reward at each step
         self.reward_calculator = RewardCalculator()
 
-        # create a newworkx graph
+        # maintain the graph as a networkx object
         self.G = nx.DiGraph()
-        self.pos = nx.spring_layout(self.G)
-        self.offset = 0
-        self.global_map = {}
-        self.frontier_map = {}
+        self.frontier_nodes = []
+        self.frontier_indices = []
 
     def add_job(self, job_dag, generate=True):
         self.moving_executors.add_job(job_dag)
@@ -143,6 +138,9 @@ class Environment(object):
     def get_frontier_nodes(self):
         # frontier nodes := unsaturated nodes with all parent nodes saturated
         frontier_nodes = OrderedSet()
+        self.frontier_nodes = []
+        self.frontier_indices = []
+        index = 0
         for job_dag in self.job_dags:
             for node in job_dag.nodes:
                 if not node in self.node_selected and not self.saturated(node):
@@ -152,37 +150,38 @@ class Environment(object):
                             parents_saturated = False
                             break
                     if parents_saturated:
+                        self.frontier_nodes.append(node)
                         frontier_nodes.add(node)
+                        self.frontier_indices.append(index)
+                        index += 1
+                        continue
+
+                self.frontier_nodes.append(None)
+                index += 1
 
         return frontier_nodes
 
-    def get_frontier_node_list(self):
-
-        frontier_nodes = []
-        leaf_nodes = []
-        # traverse through all the nodes 
+    def get_frontier_list(self):
+        # frontier nodes := unsaturated nodes with all parent nodes saturated
+        self.frontier_nodes = []
+        self.frontier_indices = []
         index = 0
-        
         for job_dag in self.job_dags:
             for node in job_dag.nodes:
                 if not node in self.node_selected and not self.saturated(node):
                     parents_saturated = True
-
-                    # if the parent nodes are saturated update the list
                     for parent_node in node.parent_nodes:
                         if not self.saturated(parent_node):
                             parents_saturated = False
                             break
                     if parents_saturated:
-                        frontier_nodes.append(node)
-                        leaf_nodes.append(index)
+                        self.frontier_nodes.append(node)
+                        self.frontier_indices.append(index)
                         index += 1
                         continue
-                
-                frontier_nodes.append(None)
-                index += 1
 
-        return frontier_nodes, leaf_nodes
+                self.frontier_nodes.append(None)
+                index += 1
 
     def get_executor_limits(self):
         # "minimum executor limit" for each job
@@ -200,6 +199,14 @@ class Environment(object):
             executor_limit[job_dag] = len(job_dag.executors) - curr_exec
 
         return executor_limit
+
+    def observe(self):
+        node_inputs = self.translate_state()
+        self.get_frontier_nodes()
+        assert len(self.G.nodes()) == len(node_inputs)
+        g = dgl.from_networkx(self.G)
+        g = dgl.add_self_loop(g).to(args.cuda)
+        return g, self.frontier_nodes, self.frontier_indices, self.num_source_exec, node_inputs
 
     def saturated(self, node):
         # frontier nodes := unsaturated nodes with all parent nodes saturated
@@ -272,20 +279,14 @@ class Environment(object):
 
         # compute number of valid executors to assign
         if next_node is not None:
-            use_exec = 0
-            try:
-                calc = next_node.num_tasks - next_node.next_task_idx - \
-                            self.exec_commit.node_commit[next_node] - \
-                            self.moving_executors.count(next_node)
-                use_exec = min(calc, limit)
-                use_exec = max(1, use_exec)
-                use_exec = min(use_exec, self.num_source_exec)
-            except Exception as e:
-                print(next_node in self.get_frontier_nodes())
-                print(next_node)
-                raise Exception("stop running")
+            calc = min(next_node.num_tasks - next_node.next_task_idx - \
+                           self.exec_commit.node_commit[next_node] - \
+                           self.moving_executors.count(next_node), limit)
+            use_exec = min(calc, limit)
+            use_exec = max(1, use_exec)
+            use_exec = min(use_exec, self.num_source_exec)
         else:
-            use_exec = self.num_source_exec
+            use_exec =self.num_source_exec
         assert use_exec > 0
 
         self.exec_commit.add(source, next_node, use_exec)
@@ -318,9 +319,7 @@ class Environment(object):
                 # bookkeepings for node completion
                 frontier_changed = False
                 if node.num_finished_tasks == node.num_tasks:
-                    assert not node.tasks_all_done  # only complete once                    
-                    self.G.remove_node(self.global_map[node])
-                    del self.global_map[node]
+                    assert not node.tasks_all_done  # only complete once
                     node.tasks_all_done = True
                     node.job_dag.num_nodes_done += 1
                     node.node_finish_time = self.wall_time.curr_time
@@ -393,8 +392,8 @@ class Environment(object):
                (self.wall_time.curr_time >= self.max_time))
 
         if done:
-            if not (self.wall_time.curr_time >= self.max_time or len(self.job_dags) == 0):
-                print(len(self.job_dags))
+            assert self.wall_time.curr_time >= self.max_time or \
+                   len(self.job_dags) == 0
 
         return reward, done
 
@@ -407,7 +406,6 @@ class Environment(object):
         self.job_dags.remove(job_dag)
         self.finished_job_dags.add(job_dag)
         self.action_map = compute_act_map(self.job_dags)
-        del self.global_map[job_dag]
         self.generate_job_graph()
 
     def reset(self, max_time=np.inf):
@@ -430,83 +428,36 @@ class Environment(object):
         # add initial set of jobs in the system
         for job_dag in self.job_dags:
             self.add_job(job_dag, False)
-        self.G = nx.DiGraph()
-        self.pos = nx.spring_layout(self.G)
-        self.offset = 0
-        self.global_map = {}
-        self.generate_job_graph()
         # put all executors as source executors initially
         self.source_job = None
         self.num_source_exec = len(self.executors)
         self.exec_to_schedule = OrderedSet(self.executors)
+        self.generate_job_graph()
 
     def seed(self, seed):
         self.np_random.seed(seed)
 
-    def generate_exec_graph(self):
-        G = nx.DiGraph()
-        print("called")
-        for executor in self.executors:
-            if executor in self.moving_executors:
-                continue
-            G = nx.compose(G, executor.get_simple_graph())
-
-        G = nx.compose(G, self.moving_executors.get_simple_graph())
-        return G
-
-    def generate_job_graph(self):
-
-        for job_dag in self.job_dags:
-            
-            if job_dag in self.global_map:
-                continue
-            
-            self.global_map[job_dag] = True
-
-            for i, node in enumerate(job_dag.nodes):
-                self.global_map[node] = self.offset+i
-                self.G.add_node(self.offset+i)
-
-            for i in range(job_dag.num_nodes):
-                for j in range(job_dag.num_nodes):
-                    if job_dag.adj_mat[i][j] == 1:
-                        self.G.add_edge(self.offset+j, self.offset+i)
-
-            self.offset += job_dag.num_nodes  
-
-        return self.G            
-
-    def observe(self):
-        node_inputs = self.translate_state(self.job_dags, self.source_job, self.num_source_exec, self.exec_commit, self.moving_executors)
-        frontier_nodes, leaf_nodes = self.get_frontier_node_list()
-        
-        assert len(self.G.nodes()) == len(node_inputs)
-        g = dgl.from_networkx(self.G)
-        g = dgl.add_self_loop(g).to("cuda")
-        return g, frontier_nodes, leaf_nodes, self.num_source_exec, \
-               node_inputs
-
-    def translate_state(self, job_dags, source_job, num_source_exec, exec_commit, moving_executors, node_input_dim=5, job_input_dim=3):
+    def translate_state(self, node_input_dim=5, job_input_dim=3):
         """
         Translate the observation to matrix form
         """
 
         # compute total number of nodes
-        total_num_nodes = int(np.sum([(job_dag.num_nodes - job_dag.num_nodes_done) for job_dag in job_dags]))
+        total_num_nodes = int(np.sum([job_dag.num_nodes for job_dag in self.job_dags]))
 
         # job and node inputs to feed
         node_inputs = np.zeros([total_num_nodes, node_input_dim])
-        job_inputs = np.zeros([len(job_dags), job_input_dim])
+        job_inputs = np.zeros([len(self.job_dags), job_input_dim])
 
         # sort out the exec_map
         exec_map = {}
-        for job_dag in job_dags:
+        for job_dag in self.job_dags:
             exec_map[job_dag] = len(job_dag.executors)
         # count in moving executors
-        for node in moving_executors.moving_executors.values():
+        for node in self.moving_executors.moving_executors.values():
             exec_map[node.job_dag] += 1
         # count in executor commit
-        for s in exec_commit.commit:
+        for s in self.exec_commit.commit:
             if isinstance(s, JobDAG):
                 j = s
             elif isinstance(s, Node):
@@ -516,33 +467,30 @@ class Environment(object):
             else:
                 print('source', s, 'unknown')
                 exit(1)
-            for n in exec_commit.commit[s]:
+            for n in self.exec_commit.commit[s]:
                 if n is not None and n.job_dag != j:
-                    exec_map[n.job_dag] += exec_commit.commit[s][n]
+                    exec_map[n.job_dag] += self.exec_commit.commit[s][n]
 
         # gather job level inputs
         job_idx = 0
-        for job_dag in job_dags:
+        for job_dag in self.job_dags:
             # number of executors in the job
             job_inputs[job_idx, 0] = exec_map[job_dag] / 20.0
             # the current executor belongs to this job or not
-            if job_dag is source_job:
+            if job_dag is self.source_job:
                 job_inputs[job_idx, 1] = 2
             else:
                 job_inputs[job_idx, 1] = -2
             # number of source executors
-            job_inputs[job_idx, 2] = num_source_exec / 20.0
+            job_inputs[job_idx, 2] = self.num_source_exec / 20.0
 
             job_idx += 1
 
         # gather node level inputs
         node_idx = 0
         job_idx = 0
-        for job_dag in job_dags:
+        for job_dag in self.job_dags:
             for node in job_dag.nodes:
-                
-                if node not in self.global_map:
-                    continue
 
                 # copy the feature from job_input first
                 node_inputs[node_idx, :3] = job_inputs[job_idx, :3]
@@ -560,10 +508,23 @@ class Environment(object):
 
             job_idx += 1
 
-        return torch.from_numpy(node_inputs).type(torch.FloatTensor).to("cuda")
+        return torch.from_numpy(node_inputs).type(torch.FloatTensor).to(args.cuda)
+    
+    def generate_job_graph(self):
 
-    def relable_graph(self):
-        lable_dict = {}
-        for i, val in enumerate(self.G.nodes()):
-            lable_dict[val] = i
-        nx.relabel_nodes(self.G, lable_dict, copy=False)
+        self.G = nx.DiGraph()
+        offset = 0
+
+        for job_dag in self.job_dags:
+
+            for i in range(len(job_dag.nodes)):
+                self.G.add_node(offset+i)
+
+            for i in range(job_dag.num_nodes):
+                for j in range(job_dag.num_nodes):
+                    if job_dag.adj_mat[i][j] == 1:
+                        self.G.add_edge(offset+j, offset+i)
+
+            offset += job_dag.num_nodes  
+
+        return self.G  

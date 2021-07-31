@@ -9,6 +9,7 @@ import time, datetime
 from matplotlib import pyplot as plt
 from dgl.nn.pytorch import GraphConv
 from numpy.random import randint
+import dgl
 
 device = "cuda"
 
@@ -25,9 +26,10 @@ class GCN(nn.Module):
     def forward(self, g, inputs):
         h = inputs
         h = self.conv1(g, h)
-        h = torch.relu(h)
+        h = torch.sigmoid(h)
         h = self.conv2(g, h)
-        h = torch.relu(h)
+        h = torch.sigmoid(h)
+        # h = self.softmax(h)
 
         return h
 
@@ -63,19 +65,19 @@ class Agent():
         self.net = self.net.to(device)
 
         self.exploration_rate = 1
-        self.exploration_rate_decay = 0.99999975
+        self.exploration_rate_decay =  0.9975 # 0.99999975
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
         self.memory = deque(maxlen=100000)
         self.batch_size = 32
 
-        self.save_every = 1e3  # no. of experiences
+        self.save_every = 5e3  # no. of experiences
 
         self.gamma = 0.9
 
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
-        self.loss_fn = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.0025)
+        self.loss_fn = torch.nn.SmoothL1Loss()
 
         self.burnin = 1e3  # min. experiences before training
         self.learn_every = 3  # no. of experiences between updates to Q_online
@@ -128,7 +130,6 @@ class Agent():
 
     def td_estimate(self, state, action):
         state, node_inputs, leaf_nodes = state
-        # print(state, "\n", action, "\n", node_inputs)
         current_Q = self.net(state, node_inputs, model="online")[action]
         return current_Q
 
@@ -141,8 +142,6 @@ class Agent():
             return reward
 
         logits = self.net(next_state, node_inputs, model="online")
-        print(len(logits), ":", logits, "\n", len(leaf_nodes), leaf_nodes)
-        exit()
         req    = logits[leaf_nodes]
         index  = torch.argmax(req).item()
         best_action = leaf_nodes[index]
@@ -151,12 +150,58 @@ class Agent():
 
         return (reward + (1 - done.float()) * self.gamma * next_Q).float()
 
-    def update_Q_online(self, td_estimate, td_target):
+    def td_estimate_batch(self, state, action):
+        # actions need to be re indexed based on batching
+        state, node_inputs = state
+        current_Q = self.net(state, node_inputs, model="online")[action]
+        return current_Q
+
+    @torch.no_grad()
+    def td_target_batch(self, reward, next_state, done):
+
+        # leaf_nodes need to be re constructed as (ending_index, leaf_nodes)
+        next_state, node_inputs, leaf_nodes = next_state
+        indices = []; action_values = []
+        prev = 0; reward_indices = 0
+
+        # calculate the logits for online model
+        logits = self.net(next_state, node_inputs, model="online")
+        logits = logits.detach().to("cpu")
+
+        # seperate the actions per graph
+        for i, leafs in leaf_nodes:
+            if len(leafs) == 0:
+                reward_indices += 1
+                prev = i
+                continue
+            req = logits[prev:i, :][leafs]
+            index = torch.argmax(req).item()
+            indices.append(leafs[index]+prev)
+            prev = i
+            action_values.append(reward_indices)
+            reward_indices += 1
+
+        # calculate the next Q values
+        next_Q = self.net(next_state, node_inputs, model="target")[indices]
+        values = torch.zeros(len(reward)).to(device)
+        values[action_values] = next_Q.flatten()
+        values = values.reshape(32, 1)
+
+        return (reward + (1 - done.float()) * self.gamma * values).float()
+
+    def update_Q_batch(self, td_estimate, td_target):
         loss = self.loss_fn(td_estimate, td_target)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
         return loss.item()
+        
+    def update_Q_online(self, td_estimate, td_target):
+        loss = self.loss_fn(td_estimate, td_target)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        return loss.sum()
 
     def sync_Q_target(self):
         self.net.target.load_state_dict(self.net.target.state_dict())
@@ -188,6 +233,7 @@ class Agent():
         memory = self.recall()
         estimate = []
         loss_list = []
+        
         for sample in memory:
             state, next_state, action, reward, done = sample
 
@@ -205,6 +251,70 @@ class Agent():
             estimate.append(td_est)
 
         return (torch.tensor(estimate).flatten().mean().item(), torch.tensor(loss_list).flatten().sum())
+
+    def get_batch(self):
+        # Sample from memory
+        memory = self.recall()
+
+        length_current = 0; length_next = 0 
+        graphs = []; node_input_list = []; actions = []; rewards = []; done_list = []
+        next_graphs = []; next_leaf_nodes = []; next_node_inputs = []
+
+        for sample in memory:
+            state, next_state, action, reward, done = sample
+
+            # actions have to before length is increased
+            actions.append(action + length_current)            
+            length_current += state[0].number_of_nodes()
+
+            # append values to respective lists to create batches
+            graphs.append(state[0])
+            node_input_list.append(state[1])
+            rewards.append(reward)
+            done_list.append(done)
+
+            # set the length of the nodes to be used for next_state
+            length_next += next_state[0].number_of_nodes()
+
+            # append values to lists to create next_state
+            next_graphs.append(next_state[0])
+            next_node_inputs.append(next_state[1])
+            next_leaf_nodes.append((length_next, next_state[2]))
+
+        # create tensors to train as batches
+        batch_state = (dgl.batch(graphs).to(device), torch.cat(node_input_list).to(device))
+        batch_actions = torch.stack(actions).to(device)
+        batch_rewards = torch.stack(rewards).to(device)
+        batch_next_state = (dgl.batch(next_graphs).to(device), torch.cat(next_node_inputs).to(device), next_leaf_nodes)
+        batch_done = torch.stack(done_list)
+
+        return batch_state, batch_next_state, batch_actions, batch_rewards, batch_done
+
+    def learn_batch(self):
+        if self.curr_step % self.sync_every == 0:
+            self.sync_Q_target()
+
+        if self.curr_step % self.save_every == 0:
+            self.save()
+
+        if self.curr_step < self.burnin:
+            return None, None
+
+        if self.curr_step % self.learn_every != 0:
+            return None, None
+
+        state, next_state, actions, rewards, done = self.get_batch()
+
+        # Get TD Estimate       
+        td_est = self.td_estimate_batch(state, actions)
+
+        # Get TD Target
+        td_tgt = torch.rand(32).to(device).reshape(32, 1) #self.td_target_batch(rewards, next_state, done)
+        
+        # get the loss function
+        loss = self.update_Q_batch(td_est, td_tgt)
+
+        return td_est.flatten().mean().item(), loss
 
 class MetricLogger:
     def __init__(self, save_dir="."):

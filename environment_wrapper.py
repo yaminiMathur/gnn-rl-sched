@@ -1,8 +1,11 @@
 from operator import le
-from spark_env.env import *
+from spark_env.env import Environment
+from param import args
 import torch.nn as nn
 from dgl.nn.pytorch import GraphConv
 import time
+import torch
+import numpy as np
 
 cuda = args.cuda
 
@@ -146,6 +149,8 @@ class GraphWrapper:
         self.leaf_nodes = []
         self.source_exec = max_exec
         self.logits = None
+        self.add = 0
+        self.count = 0
         
         # create prebuilt environment
         self.reset()
@@ -186,7 +191,7 @@ class GraphWrapper:
         frontier_node_count = len(self.frontier_nodes)
 
         # if no more frontier nodes then clear the executors
-        if frontier_node_count == 0:
+        if frontier_node_count == 0 or index < 0:
             reward, done = self.env.step(None, self.max_exec)
             state = self.observe()
             return state, reward, early_stop or done
@@ -197,8 +202,12 @@ class GraphWrapper:
         limit = max(1, limit)
 
         # take a step and observe the reward, completion and the state from the old environement
+        # start = time.time()
         reward, done = self.env.step(self.frontier_nodes[index], limit)
         state = self.observe()
+        # self.add += (time.time() - start)
+        # self.count += 1
+        # print(self.add / self.count)
         
         # return None, None, None
         return state, reward, done
