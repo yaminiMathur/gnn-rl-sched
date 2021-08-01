@@ -23,7 +23,7 @@ env = GraphWrapper()
 agent = Agent()
 logger = MetricLogger()
 
-agent.load("sched_net-1-190-20.pt", exploration_rate=True)
+agent.load("sched_net-1-220-20.pt", exploration_rate=True)
 episodes = 31
 for e in range(episodes):
 
