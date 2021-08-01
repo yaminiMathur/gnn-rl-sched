@@ -156,7 +156,7 @@ class GraphWrapper:
         self.reset()
     
     # reset the environment to a new seed
-    def reset(self, min_time=1, max_time=2):
+    def reset(self, min_time=1, max_time=1232131):
         seed = np.random.randint(min_time, max_time)
         self.env.seed(seed)
         self.env.reset(max_time=np.random.geometric(self.reset_prob))

@@ -64,23 +64,23 @@ class Agent():
         self.net = self.net.to(device)
 
         self.exploration_rate = 1
-        self.exploration_rate_decay = 0.9999975
+        self.exploration_rate_decay = 0.999992  # 0.9999975
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
         self.memory = deque(maxlen=100000)
         self.batch_size = 32
 
-        self.save_every = 5e3  # no. of experiences
+        self.save_every = 2.4e4  # no. of experiences
 
         self.gamma = 0.9
 
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.0005)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
-        self.burnin = 1e4      # min. experiences before training
+        self.burnin = 1e3      # min. experiences before training
         self.learn_every = 3   # no. of experiences between updates to Q_online
-        self.sync_every = 1e4  # no. of experiences between Q_target & Q_online sync
+        self.sync_every = 1e3  # no. of experiences between Q_target & Q_online sync
 
         self.assist = assist
         self.assist_range = assist_p
@@ -202,10 +202,8 @@ class Agent():
     def sync_Q_target(self):
         self.net.target.load_state_dict(self.net.target.state_dict())
 
-    def save(self):
-        save_path = (
-            self.save_dir + f"/sched_net_{int(self.curr_step // self.save_every)}.pt"
-        )
+    def save(self, episode=0):
+        save_path = (self.save_dir + f"/sched_net_{episode}.pt")
         torch.save(
             dict(model=self.net.state_dict(), exploration_rate=self.exploration_rate),
             save_path,
@@ -294,9 +292,6 @@ class Agent():
         if self.curr_step % self.sync_every == 0:
             self.sync_Q_target()
 
-        if self.curr_step % self.save_every == 0:
-            self.save()
-
         if self.curr_step < self.burnin:
             return None, None
 
@@ -315,6 +310,16 @@ class Agent():
         loss = self.update_Q_batch(td_est, td_tgt)
 
         return td_est.flatten().mean().item(), loss
+
+    def load(self, file:str, exploration_rate=False, set=False, new_rate=0.5):
+        path = self.save_dir+"/"+file
+        loaded_file = torch.load(path)
+        self.net.load_state_dict(loaded_file["model"])
+        if exploration_rate:
+            self.exploration_rate = loaded_file["exploration_rate"]
+        if set:
+            self.exploration_rate = new_rate
+        self.net.eval()
 
 class MetricLogger:
     def __init__(self, save_dir="./results"):

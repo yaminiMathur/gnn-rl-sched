@@ -23,13 +23,15 @@ env = GraphWrapper()
 agent = Agent()
 logger = MetricLogger()
 
-episodes = 10
+agent.load("sched_net-1-190-20.pt", exploration_rate=True)
+episodes = 31
 for e in range(episodes):
 
     env.reset()
     state = env.observe()
     done = False
     start = time.time()
+    total_reward = 0
 
     # Run the simulation
     while True:
@@ -39,6 +41,7 @@ for e in range(episodes):
 
         # Agent performs action
         next_state, reward, done = env.step((action, 1), False)
+        total_reward += reward
 
         # Remember
         agent.cache(state, next_state, action, reward, done)
@@ -54,12 +57,16 @@ for e in range(episodes):
 
         if done:
             break
+    
+    if e % 5 == 0:
+        agent.save()
 
-    print("Completed episode :", e, "Time Taken:", time.time()-start)
+    # print("Completed episode :", e, "Time Taken:", time.time()-start, "reward", total_reward)
     logger.log_episode()
 
-    if e % 5 == 0:
+    if e % 2 == 0:
         logger.record(episode=e, epsilon=agent.exploration_rate, step=agent.curr_step)
+
 
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                  Test
