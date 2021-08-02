@@ -18,12 +18,10 @@ class RewardCalculator(object):
         # compute the elapsed time
         if args.learn_obj == 'mean':
             for job_dag in list(self.job_dags):
-                reward -= (min(
-                    job_dag.completion_time,
-                    curr_time) - max(
-                    job_dag.start_time,
-                    self.prev_time)) / \
-                    args.reward_scale
+                reward -= (
+                    min( job_dag.completion_time, curr_time) -  \
+                    max( job_dag.start_time, self.prev_time)    \
+                ) / args.reward_scale
 
                 # if the job is done, remove it from the list
                 if job_dag.completed:

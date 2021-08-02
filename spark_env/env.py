@@ -209,10 +209,10 @@ class Environment(object):
 
         if len(self.frontier_indices) == 0 or g.number_of_nodes() == 0:
             g.add_nodes(1) 
-            node_inputs = torch.cat([node_inputs, torch.tensor([[-1,-1,-1,-1,-1]]).to(args.cuda)]).to(args.cuda)
+            node_inputs = torch.cat([node_inputs, torch.tensor([[-1,-1,-1,-1,-1]])])
             frontier_indices.append(0)
 
-        g = dgl.add_self_loop(g).to(args.cuda)
+        g = dgl.add_self_loop(g)
         assert g.number_of_nodes() == len(node_inputs)
         return g, self.frontier_nodes, frontier_indices, self.num_source_exec, node_inputs
 
@@ -516,7 +516,7 @@ class Environment(object):
 
             job_idx += 1
 
-        return torch.from_numpy(node_inputs).type(torch.FloatTensor).to(args.cuda)
+        return torch.from_numpy(node_inputs).type(torch.FloatTensor)
     
     def generate_job_graph(self):
 

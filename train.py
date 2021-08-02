@@ -3,101 +3,61 @@ from dqn import Agent, MetricLogger
 from numpy.random import randint
 import time
 
-# def save_graph(graph, pos, file_name):
-#     plt.figure(num=None, figsize=(20, 20), dpi=80)
-#     plt.axis('off')
-#     fig = plt.figure(1)
-#     nx.draw_networkx_nodes(graph,pos)
-#     nx.draw_networkx_edges(graph,pos)
-#     nx.draw_networkx_labels(graph,pos)
-
-#     plt.savefig(file_name,bbox_inches="tight")
-#     pylab.close()
-#     del fig
-
-
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                  DQN
 # ------------------------------------------------------------------------------------------------------------ #
-env = GraphWrapper()
-agent = Agent()
-logger = MetricLogger()
+def dqn_train(load_path=None, episodes=31):
+    env = GraphWrapper()
+    agent = Agent()
+    logger = MetricLogger()
 
-agent.load("sched_net-1-220-20.pt", exploration_rate=True)
-episodes = 31
-for e in range(episodes):
+    # load the presaved model
+    if load_path:
+        agent.load(load_path, exploration_rate=True)
 
-    env.reset()
-    state = env.observe()
-    done = False
-    start = time.time()
-    total_reward = 0
+    for e in range(episodes):
+        
+        seed = randint(12345)
+        env.reset(seed)
+        state = env.observe()
+        done = False
+        start = time.time()
+        total_reward = 0
+        total_actions = 0
 
-    # Run the simulation
-    while True:
+        # Run the simulation
+        while True:
 
-        # Run agent on the state
-        action = agent.act(state)
+            # Run agent on the state
+            action = agent.act(state)
 
-        # Agent performs action
-        next_state, reward, done = env.step((action, 1), False)
-        total_reward += reward
+            # Agent performs action
+            next_state, reward, done = env.step((action, 1), False)
+            total_reward += reward
+            total_actions += 1
 
-        # Remember
-        agent.cache(state, next_state, action, reward, done)
+            # Remember
+            agent.cache(state, next_state, action, reward, done)
 
-        # Learn
-        q, loss = agent.learn_batch()
+            # Learn
+            q, loss = agent.learn_batch()
 
-        # Logging
-        logger.log_step(reward, loss, q)
+            # Logging
+            logger.log_step(reward, loss, q)
 
-        # Update state
-        state = next_state
+            # Update state
+            state = next_state
 
-        if done:
-            break
-    
-    if e % 5 == 0:
-        agent.save()
+            if done:
+                break
+        
+        agent.save(3)
+        torch.cuda.empty_cache()
+        logger.log_episode()
 
-    # print("Completed episode :", e, "Time Taken:", time.time()-start, "reward", total_reward)
-    logger.log_episode()
-
-    if e % 2 == 0:
+        print('--------------------------------------------------------------------------------------------------------------------------------------------')
+        print("Completed episode :", e, "Time Taken:", time.time()-start, "reward", total_reward, "seed :", seed, "actions :", total_actions)
         logger.record(episode=e, epsilon=agent.exploration_rate, step=agent.curr_step)
+        print('--------------------------------------------------------------------------------------------------------------------------------------------')
 
-
-# ------------------------------------------------------------------------------------------------------------ #
-#                                                  Test
-# ------------------------------------------------------------------------------------------------------------ #
-# episodes = 10
-# env = GraphWrapper()
-# for e in range(episodes):
-
-#     env.reset()
-#     state = env.observe()
-#     done = False
-#     episode_reward = 0
-#     actions = 0
-#     start = time.time()
-
-#     # Run the simulation
-#     while True:
-
-#         G, node_inputs, leaf_nodes = state
-#         if len(leaf_nodes) > 0:
-#             action = leaf_nodes[randint(len(leaf_nodes))]
-#         else :
-#             action = -1
-#         # Agent performs action
-#         next_state, reward, done = env.step((action, randint(1, 10)), True)
-
-#         # Update state
-#         state = next_state
-#         episode_reward += reward
-#         actions += 1
-
-#         if done:
-#             print("episode : ",e, "episode reward", episode_reward, "actions", actions, "time", time.time()-start)
-#             break
+dqn_train(load_path="sched_net_2.pt", episodes=30)

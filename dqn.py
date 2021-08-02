@@ -1,6 +1,7 @@
 import copy
 from collections import deque
 import random
+from dgl.convert import graph
 from networkx.readwrite import leda
 import numpy as np
 import torch
@@ -11,7 +12,7 @@ from dgl.nn.pytorch import GraphConv
 from numpy.random import randint
 import dgl
 
-device = "cuda"
+cuda = "cuda"
 
 class GCN(nn.Module):
 
@@ -19,9 +20,8 @@ class GCN(nn.Module):
         super(GCN, self).__init__()
         
         self.conv1 = GraphConv(in_feats=features, out_feats=hidden_layer_size)
-        self.conv2 = GraphConv(in_feats=hidden_layer_size, out_feats=embedding_size)
-        # self.conv3 = GraphConv(hidden_layer_size, embedding_size)
-        self.softmax = nn.Softmax()
+        self.conv2 = GraphConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size)
+        self.conv3 = GraphConv(in_feats=hidden_layer_size, out_feats=embedding_size)
 
     def forward(self, g, inputs):
         h = inputs
@@ -29,13 +29,14 @@ class GCN(nn.Module):
         h = torch.sigmoid(h)
         h = self.conv2(g, h)
         h = torch.sigmoid(h)
-        # h = self.softmax(h)
+        h = self.conv3(g, h)
+        h = torch.sigmoid(h)
 
         return h
 
 class Net(nn.Module):
 
-    def __init__(self, features=5, hidden_layer_size=5, embedding_size=1):
+    def __init__(self, features=5, hidden_layer_size=10, embedding_size=1):
         super().__init__()
         
         # The GNN for online training and the target which gets updated 
@@ -61,21 +62,21 @@ class Agent():
 
         # DNN to predict the most optimal action
         self.net = Net().float()
-        self.net = self.net.to(device)
+        self.net = self.net.to(cuda)
 
         self.exploration_rate = 1
-        self.exploration_rate_decay = 0.999992  # 0.9999975
+        self.exploration_rate_decay = 0.9998 # 0.999992  # 0.9999975
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
         self.memory = deque(maxlen=100000)
         self.batch_size = 32
 
-        self.save_every = 2.4e4  # no. of experiences
+        self.save_every = 1e3  # no. of experiences
 
         self.gamma = 0.9
 
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.0005)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.001)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
         self.burnin = 1e3      # min. experiences before training
@@ -100,9 +101,10 @@ class Agent():
 
         # EXPLOIT
         else:
-            logits = self.net(G, node_inputs, model="target")
+            logits = self.net(G.to(cuda), node_inputs.to(cuda), model="target")
             req    = torch.argmax(logits[leaf_nodes]).item()
             action_idx = leaf_nodes[req]
+            del logits
 
 
         # decrease exploration_rate
@@ -114,10 +116,14 @@ class Agent():
         return action_idx
 
     def cache(self, state, next_state, action, reward, done):
-        reward = torch.tensor([reward]).to(device)
-        done = torch.tensor([done]).to(device)
-        action = torch.tensor(action).to(device)
-        self.memory.append((state, next_state, action, reward, done))
+        reward = torch.tensor([reward])
+        done = torch.tensor([done])
+        action = torch.tensor(action)
+
+        state, node_inputs, leaf_nodes = state
+        next_state, next_node_inputs, next_leaf_nodes = next_state
+
+        self.memory.append((state, node_inputs, next_state, next_node_inputs, next_leaf_nodes, action, reward, done))
 
     def recall(self):
         return random.sample(self.memory, self.batch_size)
@@ -144,12 +150,12 @@ class Agent():
         
         next_Q = self.net(next_state, node_inputs, model="target")[best_action]
 
-        return (reward + (1 - done.float()) * self.gamma * next_Q).float()
+        return (reward + (1 - done.float()) * self.gamma * next_Q.to("cpu")).float()
 
     def td_estimate_batch(self, state, action):
         # actions need to be re indexed based on batching
         state, node_inputs = state
-        current_Q = self.net(state, node_inputs, model="online")[action]
+        current_Q = self.net(state.to(cuda), node_inputs.to(cuda), model="online")[action.to(cuda)]
         return current_Q
 
     @torch.no_grad()
@@ -157,40 +163,34 @@ class Agent():
 
         # leaf_nodes need to be re constructed as (ending_index, leaf_nodes)
         next_state, node_inputs, leaf_nodes = next_state
-        indices = []; action_values = []
-        prev = 0; reward_indices = 0
-
+        indices = []; 
+        prev = 0
         # calculate the logits for online model
-        logits = self.net(next_state, node_inputs, model="online")
+        logits = self.net(next_state.to(cuda), node_inputs.to(cuda), model="online")
         logits = logits.detach()
 
         # seperate the actions per graph
         for i, leaves in leaf_nodes:
-            # if len(leafs) == 0:
-            #     reward_indices += 1
-            #     prev = i
-            #     continue
+
             req = logits[prev:i, :][leaves]
             index = torch.argmax(req).item()
             indices.append(leaves[index]+prev)
             prev = i
-            action_values.append(reward_indices)
-            reward_indices += 1
 
         # calculate the next Q values
-        next_Q = self.net(next_state, node_inputs, model="target")[indices]
-        # values = torch.zeros(len(reward)).to(device)
-        # values[action_values] = next_Q.flatten()
-        # values = values.reshape(32, 1)
+        next_Q = self.net(next_state.to(cuda), node_inputs.to(cuda), model="target")[indices]
 
-        return (reward + (1 - done.float()) * self.gamma * next_Q).float() # values).float()
+        rewards = (reward + (1 - done.float()) * self.gamma * next_Q.to("cpu")).float()
+
+        return  rewards
 
     def update_Q_batch(self, td_estimate, td_target):
-        loss = self.loss_fn(td_estimate, td_target)
+        loss = self.loss_fn(td_estimate, td_target.to(cuda))
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        return loss.item()
+        total_loss = loss.item()
+        return total_loss
         
     def update_Q_online(self, td_estimate, td_target):
         loss = self.loss_fn(td_estimate, td_target)
@@ -253,13 +253,10 @@ class Agent():
         length_current = 0; length_next = 0 
         graphs = []; node_input_list = []; actions = []; rewards = []; done_list = []
         next_graphs = []; next_leaf_nodes = []; next_node_inputs = []
+        indices = []
 
         for sample in memory:
-            state, next_state, action, reward, done = sample
-
-            # unpack the state
-            graph, node_inputs, leaf_nodes = state
-            next_graph, next_node_input, next_leaves = next_state
+            graph, node_inputs, next_graph, next_node_input, next_leaves, action, reward, done = sample
 
             # actions have to be appended before length is increased
             actions.append(action + length_current)
@@ -278,12 +275,13 @@ class Agent():
             next_graphs.append(next_graph)
             next_node_inputs.append(next_node_input)
             next_leaf_nodes.append((length_next, next_leaves))
+            indices.append(length_next)
 
         # create tensors to train as batches
-        batch_state = (dgl.batch(graphs).to(device), torch.cat(node_input_list).to(device))
-        batch_actions = torch.stack(actions).to(device)
-        batch_rewards = torch.stack(rewards).to(device)
-        batch_next_state = (dgl.batch(next_graphs).to(device), torch.cat(next_node_inputs).to(device), next_leaf_nodes)
+        batch_state = (dgl.batch(graphs), torch.cat(node_input_list))
+        batch_actions = torch.stack(actions)
+        batch_rewards = torch.stack(rewards)
+        batch_next_state = (dgl.batch(next_graphs), torch.cat(next_node_inputs), next_leaf_nodes)
         batch_done = torch.stack(done_list)
 
         return batch_state, batch_next_state, batch_actions, batch_rewards, batch_done
@@ -384,10 +382,10 @@ class MetricLogger:
         self.curr_ep_loss_length = 0
 
     def record(self, episode, epsilon, step):
-        mean_ep_reward = np.round(np.mean(self.ep_rewards[-100:]), 3)
-        mean_ep_length = np.round(np.mean(self.ep_lengths[-100:]), 3)
-        mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-100:]), 3)
-        mean_ep_q = np.round(np.mean(self.ep_avg_qs[-100:]), 3)
+        mean_ep_reward = np.round(np.mean(self.ep_rewards[-5:]), 6)
+        mean_ep_length = np.round(np.mean(self.ep_lengths[-5:]), 6)
+        mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-5:]), 6)
+        mean_ep_q = np.round(np.mean(self.ep_avg_qs[-5:]), 6)
         self.moving_avg_ep_rewards.append(mean_ep_reward)
         self.moving_avg_ep_lengths.append(mean_ep_length)
         self.moving_avg_ep_avg_losses.append(mean_ep_loss)
@@ -398,15 +396,14 @@ class MetricLogger:
         time_since_last_record = np.round(self.record_time - last_record_time, 3)
 
         print(
-            f"Episode {episode} - "
-            f"Step {step} - "
-            f"Epsilon {epsilon} - "
-            f"Mean Reward {mean_ep_reward} - "
-            f"Mean Length {mean_ep_length} - "
-            f"Mean Loss {mean_ep_loss} - "
-            f"Mean Q Value {mean_ep_q} - "
-            f"Time Delta {time_since_last_record} - "
-            f"Time {datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}"
+            f"Episode :  {episode} \n"
+            f"Step :  {step} \n"
+            f"Epsilon :  {epsilon} \n"
+            f"Mean Reward :  {mean_ep_reward} \n"
+            f"Mean Length :  {mean_ep_length} \n"
+            f"Mean Loss :  {mean_ep_loss} \n"
+            f"Mean Q Value :  {mean_ep_q} \n"
+            f"Time Delta :  {time_since_last_record} "
         )
 
         with open(self.save_log, "a") as f:

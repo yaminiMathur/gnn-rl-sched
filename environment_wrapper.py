@@ -28,24 +28,22 @@ class GCN(nn.Module):
 
 class EnvironmentWrapper:
     
-    def __init__(self, view_range=50, reset_prob=5e-7, max_exec=100, env_len = 50, turn = 40) -> None:
+    def __init__(self, view_range=50, reset_prob=5e-7, env_len = 50) -> None:
 
         # Set pre built environment
         self.env = Environment()
         
         # environment parameters
         self.reset_prob = reset_prob
-        self.max_exec = max_exec
+        self.max_exec = args.exec_cap
 
         # wrapper parameters
         self.range = view_range
         self.env_len = env_len
-        self.offset = 0
-        self.turn = turn
 
         self.frontier_nodes = []
-        self.source_exec = max_exec
-        self.logits = None
+        self.leaf_nodes = []
+        self.source_exec = args.exec_cap
         self.gnn = GCN().to(cuda)
         self.optimizer = torch.optim.Adam(self.gnn.parameters(), lr=1e-3)
         
@@ -53,12 +51,10 @@ class EnvironmentWrapper:
         self.reset()
     
     # reset the environment to a new seed
-    def reset(self, min_time=1, max_time=2):
-        seed = np.random.randint(min_time, max_time)
+    def reset(self, minseed=1, maxseed=1234):
+        seed = np.random.randint(minseed, maxseed)
         self.env.seed(seed)
         self.env.reset(max_time=np.random.geometric(self.reset_prob))
-        self.offset = 0
-        self.logits = False
         self.observe()
 
     # observe and decode an observation into usable paramaters for the agent
@@ -66,38 +62,32 @@ class EnvironmentWrapper:
     def observe(self):
         # get the new observation from the environement
         G, frontier_nodes, leaf_nodes, num_source_exec, node_inputs = self.env.observe()
+        mask = torch.zeros(G.number_of_nodes()).to(cuda)
+        mask[leaf_nodes] = 1
+        mask = mask.bool()
 
         # reset the frontier nodes and the number of free executors
         self.frontier_nodes = frontier_nodes
         self.source_exec = num_source_exec
+        self.leaf_nodes = []
 
         # calculate the logits and filter the required indices
         # based on the number of nodes the agent can see
-        logits = self.gnn(G.to(cuda), node_inputs.to(cuda))
-            
-        required_indices = []
-        for i in range(1, self.range+1):
-            if len(required_indices) == len(frontier_nodes):
-                break
-            index = (self.offset+i)%len(frontier_nodes)
-            required_indices.append(leaf_nodes[index])
-
-        # pad the output with 0 if 50 nodes are not available
-        # and add the number of source executors remaining to the vector
-        logits  = logits[required_indices]
-        padding = torch.zeros(self.range-len(logits), 1).to(cuda)
+        logits = self.gnn(G.to(cuda), node_inputs.to(cuda))         
+        logits = logits[mask]
+        padding_required = max(self.range - len(logits), 0)
+        padding = torch.zeros(padding_required, 1).to(cuda)
         logits  = torch.cat([logits, padding])
         logits  = logits.flatten()
 
-        return logits
+        return logits.detach()
 
     # perform an action and return the resultant state and reward
     def step(self, action, early_stop=True):
 
         # get the direction, job and limit
         node, limit = action
-        direction = 1
-        job = node % 50
+        node = self.leaf_nodes[node]
 
         # count the frontier nodes and 
         frontier_node_count = len(self.frontier_nodes)
@@ -108,56 +98,31 @@ class EnvironmentWrapper:
             state = self.observe()
             return state, reward, early_stop or done
 
-        # if index is greater than the number of jobs, limit it to the length of frontier nodes
-        index = (self.offset + job) % self.range
-        if index >= frontier_node_count:
-            index = frontier_node_count-1
-
-        if limit > self.source_exec :
-            limit = self.source_exec
-        limit = max(1, limit)
-
-        # update the view offset to check for more jobs i.e stay or move right
-        self.offset += direction*self.turn
-        self.offset = self.offset % self.range
-
         # take a step and observe the reward, completion and the state from the old environement
-        reward, done = self.env.step(self.frontier_nodes[index], limit)
+        reward, done = self.env.step(self.frontier_nodes[node], limit)
         state = self.observe()
         
         # return None, None, None
         return state, reward, done
 
+
 class GraphWrapper:
     
-    def __init__(self, view_range=50, reset_prob=5e-7, max_exec=100, env_len = 50, turn = 40) -> None:
+    def __init__(self, reset_prob=5e-7) -> None:
 
         # Set pre built environment
         self.env = Environment()
         
         # environment parameters
         self.reset_prob = reset_prob
-        self.max_exec = max_exec
-
-        # wrapper parameters
-        self.range = view_range
-        self.env_len = env_len
-        self.offset = 0
-        self.turn = turn
+        self.max_exec = args.exec_cap
 
         self.frontier_nodes = []
         self.leaf_nodes = []
-        self.source_exec = max_exec
-        self.logits = None
-        self.add = 0
-        self.count = 0
-        
-        # create prebuilt environment
-        self.reset()
+        self.source_exec = args.exec_cap
     
     # reset the environment to a new seed
-    def reset(self, min_time=1, max_time=1232131):
-        seed = np.random.randint(min_time, max_time)
+    def reset(self, seed:int):
         self.env.seed(seed)
         self.env.reset(max_time=np.random.geometric(self.reset_prob))
         self.offset = 0
@@ -175,16 +140,12 @@ class GraphWrapper:
         self.source_exec = num_source_exec
         self.leaf_nodes = leaf_nodes
 
-        # calculate the logits and filter the required indices
-        # based on the number of nodes the agent can see
-        # logits = self.gnn(G.to(cuda), node_inputs.to(cuda))
-
-        return G, node_inputs, leaf_nodes #logits
+        return G, node_inputs, leaf_nodes
 
     # perform an action and return the resultant state and reward
     def step(self, action, early_stop=True):
 
-        # get the direction, job and limit
+        # set the job index as per the leaf nodes
         index, limit = action
 
         # count the frontier nodes and 
@@ -202,15 +163,11 @@ class GraphWrapper:
         limit = max(1, limit)
 
         # take a step and observe the reward, completion and the state from the old environement
-        # start = time.time()
         reward, done = self.env.step(self.frontier_nodes[index], limit)
         state = self.observe()
-        # self.add += (time.time() - start)
-        # self.count += 1
-        # print(self.add / self.count)
         
-        # return None, None, None
         return state, reward, done
-
+    
+    # to get and siplay the graph
     def get_networkx(self):
         return self.env.G, self.env.pos
