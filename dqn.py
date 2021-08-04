@@ -1,5 +1,6 @@
 import copy
 from collections import deque
+from environment_wrapper import GraphWrapper
 import random
 from dgl.convert import graph
 from networkx.readwrite import leda
@@ -9,6 +10,7 @@ import torch.nn as nn
 import time, datetime
 from matplotlib import pyplot as plt
 from dgl.nn.pytorch import GraphConv
+from dgl.nn.pytorch import SAGEConv
 from numpy.random import randint
 import dgl
 
@@ -19,9 +21,12 @@ class GCN(nn.Module):
     def __init__(self, features=5, hidden_layer_size=5, embedding_size=1):
         super(GCN, self).__init__()
         
-        self.conv1 = GraphConv(in_feats=features, out_feats=hidden_layer_size)
-        self.conv2 = GraphConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size)
-        self.conv3 = GraphConv(in_feats=hidden_layer_size, out_feats=embedding_size)
+        # self.conv1 = GraphConv(in_feats=features, out_feats=hidden_layer_size)
+        # self.conv2 = GraphConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size)
+        # self.conv3 = GraphConv(in_feats=hidden_layer_size, out_feats=embedding_size)
+        self.conv1 = SAGEConv(in_feats=features, out_feats=hidden_layer_size, aggregator_type='mean')
+        self.conv2 = SAGEConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size, aggregator_type='mean')
+        self.conv3 = SAGEConv(in_feats=hidden_layer_size, out_feats=embedding_size, aggregator_type='mean')
 
     def forward(self, g, inputs):
         h = inputs
@@ -65,7 +70,7 @@ class Agent():
         self.net = self.net.to(cuda)
 
         self.exploration_rate = 1
-        self.exploration_rate_decay = 0.9998 # 0.999992  # 0.9999975
+        self.exploration_rate_decay = 0.9998 # 0.9999975 # 0.999992 
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
@@ -76,7 +81,7 @@ class Agent():
 
         self.gamma = 0.9
 
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.001)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
         self.burnin = 1e3      # min. experiences before training
@@ -87,23 +92,25 @@ class Agent():
         self.assist_range = assist_p
         self.softmax = nn.Softmax()
 
-    def act(self, state, parallelism=1):
+    def act(self, state, assist_index=None):
         
         G, node_inputs, leaf_nodes = state
         
         # EXPLORE
         if np.random.rand() < self.exploration_rate:
-            index = randint(len(leaf_nodes))
-            if self.assist:
-                action_idx = leaf_nodes[index]
-            else :
-                action_idx = leaf_nodes[index]
+            if assist_index:
+                action_idx = assist_index
+            else:
+                index = randint(len(leaf_nodes))
+                # limit = int(node_inputs[leaf_nodes[index]][0].item()*20)
+                action_idx = (leaf_nodes[index], 1)
 
         # EXPLOIT
         else:
             logits = self.net(G.to(cuda), node_inputs.to(cuda), model="target")
             req    = torch.argmax(logits[leaf_nodes]).item()
-            action_idx = leaf_nodes[req]
+            # limit  = int(node_inputs[leaf_nodes[req]][0].item()*20)
+            action_idx = (leaf_nodes[req], 1)
             del logits
 
 
@@ -319,19 +326,33 @@ class Agent():
             self.exploration_rate = new_rate
         self.net.eval()
 
+    def direct_train(self, env:GraphWrapper, episodes=10):
+
+        for i in range(episodes):
+
+            state = env.observe()
+            done = False
+
+            while True:
+
+                action = env.step(state)
+                exit()
+
+
+
 class MetricLogger:
-    def __init__(self, save_dir="./results"):
-        self.save_log = save_dir + "/episodes.log"
+    def __init__(self, save_dir="./results", version="0"):
+        self.save_log = save_dir + "/episodes"+version+".log"
         with open(self.save_log, "w") as f:
             f.write(
                 f"{'Episode':>8}{'Step':>8}{'Epsilon':>10}{'MeanReward':>15}"
                 f"{'MeanLength':>15}{'MeanLoss':>15}{'MeanQValue':>15}"
                 f"{'TimeDelta':>15}{'Time':>20}\n"
             )
-        self.ep_rewards_plot = save_dir + "/reward_plot.png"
-        self.ep_lengths_plot = save_dir + "/length_plot.png"
-        self.ep_avg_losses_plot = save_dir + "/loss_plot.png"
-        self.ep_avg_qs_plot = save_dir + "/q_plot.png"
+        self.ep_rewards_plot = save_dir + "/reward_plot_"+version+".png"
+        self.ep_lengths_plot = save_dir + "/length_plot_"+version+".png"
+        self.ep_avg_losses_plot = save_dir + "/loss_plot_"+version+".png"
+        self.ep_avg_qs_plot = save_dir + "/q_plot_"+version+".png"
 
         # History metrics
         self.ep_rewards = []

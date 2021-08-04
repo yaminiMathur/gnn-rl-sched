@@ -60,7 +60,7 @@ class Agent_AC(object):
         self.optimizer.zero_grad()
 
         # sum up all the values of policy_losses and value_losses
-        loss_node   = torch.stack(policy_node).to(cuda).sum()
+        loss_node        = torch.stack(policy_node).to(cuda).sum()
         loss_parallelism = torch.stack(policy_parallelism).to(cuda).sum()
         loss_critic_node = torch.stack(value_losses_node).to(cuda).sum()
         loss_critic_para = torch.stack(value_losses_para).to(cuda).sum()

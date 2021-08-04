@@ -486,9 +486,9 @@ class Environment(object):
             job_inputs[job_idx, 0] = exec_map[job_dag] / 20.0
             # the current executor belongs to this job or not
             if job_dag is self.source_job:
-                job_inputs[job_idx, 1] = 2
+                job_inputs[job_idx, 1] = 1
             else:
-                job_inputs[job_idx, 1] = -2
+                job_inputs[job_idx, 1] = 0
             # number of source executors
             job_inputs[job_idx, 2] = self.num_source_exec / 20.0
 

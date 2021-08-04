@@ -1,3 +1,6 @@
+from numpy import load
+from agent import Agent_AC
+from actor_critic import ActorCritic
 from environment_wrapper import *
 from dqn import Agent, MetricLogger
 from numpy.random import randint
@@ -6,14 +9,16 @@ import time
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                  DQN
 # ------------------------------------------------------------------------------------------------------------ #
-def dqn_train(load_path=None, episodes=31):
+def dqn_train(load_path=None, episodes=31, version=4):
     env = GraphWrapper()
     agent = Agent()
-    logger = MetricLogger()
+    logger = MetricLogger(version=str(version))
 
     # load the presaved model
     if load_path:
         agent.load(load_path, exploration_rate=True)
+
+    prob = 0; index = 0
 
     for e in range(episodes):
         
@@ -28,16 +33,20 @@ def dqn_train(load_path=None, episodes=31):
         # Run the simulation
         while True:
 
-            # Run agent on the state
-            action = agent.act(state)
-
+            # Assist 80 % and explore 20 %
+            if randint(0, 100) < prob:
+                index = env.auto_step()
+                action = agent.act(state, index)
+            else:
+                action = agent.act(state)
+ 
             # Agent performs action
-            next_state, reward, done = env.step((action, 1), False)
+            next_state, reward, done = env.step(action, False)
             total_reward += reward
             total_actions += 1
 
             # Remember
-            agent.cache(state, next_state, action, reward, done)
+            agent.cache(state, next_state, action[0], reward, done)
 
             # Learn
             q, loss = agent.learn_batch()
@@ -51,7 +60,7 @@ def dqn_train(load_path=None, episodes=31):
             if done:
                 break
         
-        agent.save(3)
+        agent.save(version)
         torch.cuda.empty_cache()
         logger.log_episode()
 
@@ -60,4 +69,10 @@ def dqn_train(load_path=None, episodes=31):
         logger.record(episode=e, epsilon=agent.exploration_rate, step=agent.curr_step)
         print('--------------------------------------------------------------------------------------------------------------------------------------------')
 
-dqn_train(load_path="sched_net_2.pt", episodes=30)
+dqn_train(load_path="sched_net_1.pt", episodes=70, version=2)
+# ------------------------------------------------------------------------------------------------------------ #
+#                                                Actor Critic
+# ------------------------------------------------------------------------------------------------------------ #
+
+# def actor_critic_train():
+#     agent = Agent_AC()

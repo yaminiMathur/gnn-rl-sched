@@ -16,7 +16,8 @@ def fair(env:GraphWrapper, seed:int):
     while True:
 
         # perform action
-        next_state, reward, done = env.step((env.leaf_nodes[0], 1), False)
+        # next_state, reward, done = env.step((env.leaf_nodes[0], 1), False)
+        reward, done = env.auto_step(step=True)
         total_reward += reward
         actions += 1
 
@@ -40,7 +41,7 @@ def agent_action(env:GraphWrapper, seed:int, agent:Agent, e:int, logger:MetricLo
         action = agent.act(state)
 
         # Agent performs action
-        next_state, reward, done = env.step((action, 1), False)
+        next_state, reward, done = env.step(action, False)
         total_reward += reward
 
         logger.log_step(reward, None, None)
@@ -56,7 +57,7 @@ def agent_action(env:GraphWrapper, seed:int, agent:Agent, e:int, logger:MetricLo
     logger.record(episode=e, epsilon=agent.exploration_rate, step=agent.curr_step)
 
 
-def dqn_test(load_path="sched_net_3.pt", episodes=31):
+def dqn_test(load_path="sched_net_0.pt", episodes=10):
     env = GraphWrapper()
     agent = Agent()
     logger = MetricLogger()
@@ -70,7 +71,7 @@ def dqn_test(load_path="sched_net_3.pt", episodes=31):
         fair(env, seed)
         agent_action(env, seed, agent, e, logger)
 
-dqn_test(episodes=20)
+dqn_test(episodes=10)
 
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                Env Test
