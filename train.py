@@ -1,6 +1,4 @@
 from numpy import load
-from agent import Agent_AC
-from actor_critic import ActorCritic
 from environment_wrapper import *
 from dqn import Agent, MetricLogger
 from numpy.random import randint
@@ -9,16 +7,16 @@ import time
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                  DQN
 # ------------------------------------------------------------------------------------------------------------ #
-def dqn_train(load_path=None, episodes=31, version=4):
-    env = GraphWrapper()
-    agent = Agent()
-    logger = MetricLogger(version=str(version))
+def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean"):
+    env    = GraphWrapper()
+    agent  = Agent(aggregator=aggregator)
+    logger = MetricLogger(version=str(version), mode="train", aggregator=aggregator)
 
     # load the presaved model
     if load_path:
         agent.load(load_path, exploration_rate=True)
 
-    prob = 0; index = 0
+    prob = 100; index = 0
 
     for e in range(episodes):
         
@@ -27,16 +25,15 @@ def dqn_train(load_path=None, episodes=31, version=4):
         state = env.observe()
         done = False
         start = time.time()
-        total_reward = 0
-        total_actions = 0
+        total_reward = 0; total_actions = 0
 
         # Run the simulation
         while True:
 
-            # Assist 80 % and explore 20 %
+            # Assist based on probability value
             if randint(0, 100) < prob:
                 index = env.auto_step()
-                action = agent.act(state, index)
+                action = agent.act(state, (index, 1))
             else:
                 action = agent.act(state)
  
@@ -69,7 +66,7 @@ def dqn_train(load_path=None, episodes=31, version=4):
         logger.record(episode=e, epsilon=agent.exploration_rate, step=agent.curr_step)
         print('--------------------------------------------------------------------------------------------------------------------------------------------')
 
-dqn_train(load_path="sched_net_1.pt", episodes=70, version=2)
+dqn_train(episodes=70, version=2, aggregator="mean")
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                Actor Critic
 # ------------------------------------------------------------------------------------------------------------ #

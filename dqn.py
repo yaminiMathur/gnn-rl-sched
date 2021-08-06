@@ -3,7 +3,6 @@ from collections import deque
 from environment_wrapper import GraphWrapper
 import random
 from dgl.convert import graph
-from networkx.readwrite import leda
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,20 +12,24 @@ from dgl.nn.pytorch import GraphConv
 from dgl.nn.pytorch import SAGEConv
 from numpy.random import randint
 import dgl
+from param import args
 
-cuda = "cuda"
+cuda = args.cuda
 
 class GCN(nn.Module):
 
-    def __init__(self, features=5, hidden_layer_size=5, embedding_size=1):
+    def __init__(self, aggregator, features=5, hidden_layer_size=5, embedding_size=1):
         super(GCN, self).__init__()
         
+        # Simple Graph Conv 
         # self.conv1 = GraphConv(in_feats=features, out_feats=hidden_layer_size)
         # self.conv2 = GraphConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size)
         # self.conv3 = GraphConv(in_feats=hidden_layer_size, out_feats=embedding_size)
-        self.conv1 = SAGEConv(in_feats=features, out_feats=hidden_layer_size, aggregator_type='mean')
-        self.conv2 = SAGEConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size, aggregator_type='mean')
-        self.conv3 = SAGEConv(in_feats=hidden_layer_size, out_feats=embedding_size, aggregator_type='mean')
+
+        # Using Graph SAGE to get embedding using the neighbours
+        self.conv1 = SAGEConv(in_feats=features, out_feats=hidden_layer_size, aggregator_type=aggregator)
+        self.conv2 = SAGEConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size, aggregator_type=aggregator)
+        self.conv3 = SAGEConv(in_feats=hidden_layer_size, out_feats=embedding_size, aggregator_type=aggregator)
 
     def forward(self, g, inputs):
         h = inputs
@@ -41,12 +44,12 @@ class GCN(nn.Module):
 
 class Net(nn.Module):
 
-    def __init__(self, features=5, hidden_layer_size=10, embedding_size=1):
+    def __init__(self, aggregator, features=5, hidden_layer_size=10, embedding_size=1):
         super().__init__()
         
         # The GNN for online training and the target which gets updated 
         # in a timely manner
-        self.online = GCN(features, hidden_layer_size, embedding_size)
+        self.online = GCN(aggregator, features, hidden_layer_size, embedding_size)
         self.target = copy.deepcopy(self.online)
 
         for p in self.target.parameters():
@@ -62,15 +65,16 @@ class Net(nn.Module):
 
 class Agent():
 
-    def __init__(self, save_dir="./models", assist=True, assist_p=(1, 7)):
+    def __init__(self, save_dir="./models", assist=True, assist_p=(1, 7), aggregator="mean"):
         self.save_dir = save_dir
 
         # DNN to predict the most optimal action
-        self.net = Net().float()
+        self.net = Net(aggregator).float()
         self.net = self.net.to(cuda)
+        self.aggregator = aggregator
 
         self.exploration_rate = 1
-        self.exploration_rate_decay = 0.9998 # 0.9999975 # 0.999992 
+        self.exploration_rate_decay = 0.99992 # 0.9999975 # 0.999992 
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
@@ -81,7 +85,7 @@ class Agent():
 
         self.gamma = 0.9
 
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.001)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
         self.burnin = 1e3      # min. experiences before training
@@ -102,14 +106,12 @@ class Agent():
                 action_idx = assist_index
             else:
                 index = randint(len(leaf_nodes))
-                # limit = int(node_inputs[leaf_nodes[index]][0].item()*20)
                 action_idx = (leaf_nodes[index], 1)
 
         # EXPLOIT
         else:
             logits = self.net(G.to(cuda), node_inputs.to(cuda), model="target")
             req    = torch.argmax(logits[leaf_nodes]).item()
-            # limit  = int(node_inputs[leaf_nodes[req]][0].item()*20)
             action_idx = (leaf_nodes[req], 1)
             del logits
 
@@ -134,30 +136,6 @@ class Agent():
 
     def recall(self):
         return random.sample(self.memory, self.batch_size)
-        # state, next_state, action, reward, done = map(torch.stack, zip(*batch))
-        # return state, next_state, action.squeeze(), reward.squeeze(), done.squeeze()
-
-    def td_estimate(self, state, action):
-        state, node_inputs, leaf_nodes = state
-        current_Q = self.net(state, node_inputs, model="online")[action]
-        return current_Q
-
-    @torch.no_grad()
-    def td_target(self, reward, next_state, done):
-
-        next_state, node_inputs, leaf_nodes = next_state
-
-        if len(leaf_nodes) == 0:
-            return reward
-
-        logits = self.net(next_state, node_inputs, model="online")
-        req    = logits[leaf_nodes]
-        index  = torch.argmax(req).item()
-        best_action = leaf_nodes[index]
-        
-        next_Q = self.net(next_state, node_inputs, model="target")[best_action]
-
-        return (reward + (1 - done.float()) * self.gamma * next_Q.to("cpu")).float()
 
     def td_estimate_batch(self, state, action):
         # actions need to be re indexed based on batching
@@ -198,60 +176,17 @@ class Agent():
         self.optimizer.step()
         total_loss = loss.item()
         return total_loss
-        
-    def update_Q_online(self, td_estimate, td_target):
-        loss = self.loss_fn(td_estimate, td_target)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        return loss.sum()
 
     def sync_Q_target(self):
         self.net.target.load_state_dict(self.net.target.state_dict())
 
     def save(self, episode=0):
-        save_path = (self.save_dir + f"/sched_net_{episode}.pt")
+        save_path = (self.save_dir + f"/sched_net_{self.aggregator}_{episode}.pt")
         torch.save(
             dict(model=self.net.state_dict(), exploration_rate=self.exploration_rate),
             save_path,
         )
         print(f"Sched_net saved to {save_path} at step {self.curr_step}")
-
-    def learn(self):
-        if self.curr_step % self.sync_every == 0:
-            self.sync_Q_target()
-
-        if self.curr_step % self.save_every == 0:
-            self.save()
-
-        if self.curr_step < self.burnin:
-            return None, None
-
-        if self.curr_step % self.learn_every != 0:
-            return None, None
-
-        # Sample from memory
-        memory = self.recall()
-        estimate = []
-        loss_list = []
-        
-        for sample in memory:
-            state, next_state, action, reward, done = sample
-
-            if len(state[2]) == 0:
-                continue
-
-            # Get TD Estimate
-            td_est = self.td_estimate(state, action)
-
-            # Get TD Target
-            td_tgt = self.td_target(reward, next_state, done)
-
-            # Backpropagate loss through Q_online
-            loss_list.append(self.update_Q_online(td_est, td_tgt))
-            estimate.append(td_est)
-
-        return (torch.tensor(estimate).flatten().mean().item(), torch.tensor(loss_list).flatten().sum())
 
     def get_batch(self):
         # Sample from memory
@@ -338,21 +273,20 @@ class Agent():
                 action = env.step(state)
                 exit()
 
-
-
 class MetricLogger:
-    def __init__(self, save_dir="./results", version="0"):
-        self.save_log = save_dir + "/episodes"+version+".log"
+    def __init__(self, save_dir="./results", mode="train", version="0", aggregator="mean"):
+        save_dir = save_dir+"/"+mode
+        self.save_log = save_dir + "/episodes_"+aggregator+"_"+version+".log"
         with open(self.save_log, "w") as f:
             f.write(
                 f"{'Episode':>8}{'Step':>8}{'Epsilon':>10}{'MeanReward':>15}"
                 f"{'MeanLength':>15}{'MeanLoss':>15}{'MeanQValue':>15}"
                 f"{'TimeDelta':>15}{'Time':>20}\n"
             )
-        self.ep_rewards_plot = save_dir + "/reward_plot_"+version+".png"
-        self.ep_lengths_plot = save_dir + "/length_plot_"+version+".png"
-        self.ep_avg_losses_plot = save_dir + "/loss_plot_"+version+".png"
-        self.ep_avg_qs_plot = save_dir + "/q_plot_"+version+".png"
+        self.ep_rewards_plot = save_dir + "/reward_plot_"+aggregator+"_"+version+".png"
+        self.ep_lengths_plot = save_dir + "/length_plot_"+aggregator+"_"+version+".png"
+        self.ep_avg_losses_plot = save_dir + "/loss_plot_"+aggregator+"_"+version+".png"
+        self.ep_avg_qs_plot = save_dir + "/q_plot_"+aggregator+"_"+version+".png"
 
         # History metrics
         self.ep_rewards = []
@@ -437,5 +371,7 @@ class MetricLogger:
 
         for metric in ["ep_rewards", "ep_lengths", "ep_avg_losses", "ep_avg_qs"]:
             plt.plot(getattr(self, f"moving_avg_{metric}"))
+            plt.xlabel('episodes')
+            plt.ylabel(metric)
             plt.savefig(getattr(self, f"{metric}_plot"))
             plt.clf()

@@ -1,4 +1,4 @@
-# Decima
+# Graphinator
 
 Simulator part of Decima (SIGCOMM '19) https://web.mit.edu/decima
 

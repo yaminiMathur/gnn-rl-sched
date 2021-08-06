@@ -1,3 +1,4 @@
+from matplotlib import use
 import numpy as np
 import copy
 from collections import OrderedDict
@@ -293,6 +294,8 @@ class Environment(object):
             use_exec = min(calc, limit)
             use_exec = max(1, use_exec)
             use_exec = min(use_exec, self.num_source_exec)
+            print(next_node, use_exec)
+            exit()
         else:
             use_exec =self.num_source_exec
         assert use_exec > 0

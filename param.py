@@ -156,13 +156,16 @@ class Args() :
         self.tpch_num = 22
         self.tpch_size = ['2g','5g','10g','20g','50g','80g','100g']
         self.job_folder = './spark_env/tpch/'
-        self.num_stream_dags = 200
+        self.num_stream_dags = 1000
         self.num_stream_dags_grow = 0.2
-        self.stream_interval =  1
-        self.warmup_delay =1000
+        self.stream_interval = 25000
+        self.new_dag_interval = 1000
+        self.warmup_delay = 1000
         self.learn_obj = 'mean' # makespan
         self.reward_scale = 100000.0
         self.cuda = "cuda"
+        self.canvas_base = 10
+        self.new_dag_interval_noise = 1000
 
 
 args = Args()
