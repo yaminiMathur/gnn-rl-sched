@@ -16,7 +16,7 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean"):
     if load_path:
         agent.load(load_path, exploration_rate=True)
 
-    prob = 100; index = 0
+    prob = 0; index = 0
 
     for e in range(episodes):
         
@@ -33,7 +33,7 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean"):
             # Assist based on probability value
             if randint(0, 100) < prob:
                 index = env.auto_step()
-                action = agent.act(state, (index, 1))
+                action = agent.act(state, (index, 2))
             else:
                 action = agent.act(state)
  
@@ -66,7 +66,7 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean"):
         logger.record(episode=e, epsilon=agent.exploration_rate, step=agent.curr_step)
         print('--------------------------------------------------------------------------------------------------------------------------------------------')
 
-dqn_train(episodes=70, version=2, aggregator="mean")
+dqn_train(load_path='sched_net_mean_3.pt', episodes=170, version=3, aggregator="mean")
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                Actor Critic
 # ------------------------------------------------------------------------------------------------------------ #

@@ -337,10 +337,10 @@ class MetricLogger:
         self.curr_ep_loss_length = 0
 
     def record(self, episode, epsilon, step):
-        mean_ep_reward = np.round(np.mean(self.ep_rewards[-5:]), 6)
-        mean_ep_length = np.round(np.mean(self.ep_lengths[-5:]), 6)
-        mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-5:]), 6)
-        mean_ep_q = np.round(np.mean(self.ep_avg_qs[-5:]), 6)
+        mean_ep_reward = np.round(np.mean(self.ep_rewards[-100:]), 6)
+        mean_ep_length = np.round(np.mean(self.ep_lengths[-100:]), 6)
+        mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-100:]), 6)
+        mean_ep_q = np.round(np.mean(self.ep_avg_qs[-100:]), 6)
         self.moving_avg_ep_rewards.append(mean_ep_reward)
         self.moving_avg_ep_lengths.append(mean_ep_length)
         self.moving_avg_ep_avg_losses.append(mean_ep_loss)

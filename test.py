@@ -26,8 +26,8 @@ def dynamic(env:GraphWrapper, seed:int):
         if done:
             break
     
-    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/dag_time_dynamic.png")
-    visualize_executor_usage(env.env.finished_job_dags, "./results/test/exec_time_dynamic.png")
+    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/dag_time_dynamic_makespan.png")
+    visualize_executor_usage(env.env.finished_job_dags, "./results/test/exec_time_dynamic_makespan.png")
     
     print("---------------------------------------------------------------------------------------------")
     print("Dynamic Scheduling Baseline -", " Reward :", total_reward, " Actions :", actions, " Seed : ", seed)
@@ -62,14 +62,14 @@ def agent_action(env:GraphWrapper, seed:int, agent:Agent, e:int):
             break
 
     
-    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/dag_time.png")
-    visualize_executor_usage(env.env.finished_job_dags, "./results/test/exec_time.png")
+    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/dag_time_makespan.png")
+    visualize_executor_usage(env.env.finished_job_dags, "./results/test/exec_time_makespan.png")
 
     print("episode reward : ", total_reward, "total action time : ", action_time, "total actions : ", actions)
     return total_reward
 
 
-def dqn_test(load_path="sched_net_1_mean.pt", episodes=25, aggregator="mean"):
+def dqn_test(load_path="sched_net_mean_3.pt", episodes=25, aggregator="mean"):
     env = GraphWrapper()
     agent = Agent()
     # logger = MetricLogger(version="0_old", mode="test", aggregator=aggregator)
@@ -102,7 +102,7 @@ cdf_2 = np.cumsum(pdf_2)
 plt.plot(bins_1[1:], cdf_1, color="red", label="Dynamic Sched")
 plt.plot(bins_2[1:], cdf_2, label="GNN sched")
 plt.legend()
-plt.savefig('./results/cdf_combined.png')
+plt.savefig('./results/cdf_combined_11.png')
 
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                Env Test
