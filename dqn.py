@@ -74,23 +74,23 @@ class Agent():
         self.aggregator = aggregator
 
         self.exploration_rate = 1
-        self.exploration_rate_decay = 0.99992 # 0.9999975 # 0.999992 
+        self.exploration_rate_decay = args.exploration_rate_decay # 0.9999975 # 0.999992 
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
         self.memory = deque(maxlen=100000)
-        self.batch_size = 32
+        self.batch_size = args.batch_size
 
         self.save_every = 1e3  # no. of experiences
 
-        self.gamma = 0.9
+        self.gamma = args.gamma
 
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.001)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=args.lr)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
-        self.burnin = 1e3      # min. experiences before training
-        self.learn_every = 3   # no. of experiences between updates to Q_online
-        self.sync_every = 1e3  # no. of experiences between Q_target & Q_online sync
+        self.burnin = args.burnin            # min. experiences before training
+        self.learn_every = args.learn_every  # no. of experiences between updates to Q_online
+        self.sync_every = args.sync_every    # no. of experiences between Q_target & Q_online sync
 
         self.assist = assist
         self.assist_range = assist_p
@@ -251,13 +251,13 @@ class Agent():
 
         return td_est.flatten().mean().item(), loss
 
-    def load(self, file:str, exploration_rate=False, set=False, new_rate=0.5):
+    def load(self, file:str, exploration_rate=False, new_rate=0.6):
         path = self.save_dir+"/"+file
         loaded_file = torch.load(path)
         self.net.load_state_dict(loaded_file["model"])
         if exploration_rate:
             self.exploration_rate = loaded_file["exploration_rate"]
-        if set:
+        else:
             self.exploration_rate = new_rate
         self.net.eval()
 
