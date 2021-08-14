@@ -67,10 +67,11 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=10
         logger.record(episode=e, epsilon=agent.exploration_rate, step=agent.curr_step)
         print('--------------------------------------------------------------------------------------------------------------------------------------------')
 
-
+# assist seeds for mean : [9968, 8726, 11869, 6750, 5684, 6008, 9276, 5, 3283, 203, 5808, 5596, 6043, 9571, 5579]
+# uncomment below 2 lines and set decay = 0.9998 in params to train for mean (also use assist seeds to give better training results)
 # dqn_train(load_path=None, episodes=15, version=0, aggregator="mean", prob=100) # decay = 0.9998
 # dqn_train(load_path="sched_net_pool_0.pt", episodes=50, version=1, aggregator="mean", prob=0, exp_rate=True)
 
-# dqn_train(load_path=None, episodes=100, version=0, aggregator="pool", prob=90) # decay = 0.999992
-# assist seeds : [9968, 8726, 11869, 6750, 5684, 6008, 9276, 5, 3283, 203, 5808, 5596, 6043, 9571, 5579]
-# seeds - pool : []
+# uncomment below 2 lines and set decay = 0.999992 and burnin to 1e4 in params to train for pool
+# dqn_train(load_path=None, episodes=100, version=0, aggregator="pool", prob=85) # decay = 0.999992
+# dqn_train(load_path="sched_net_pool_0.pt", episodes=100, version=1, aggregator="pool", prob=85)

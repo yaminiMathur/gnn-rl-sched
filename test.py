@@ -6,7 +6,7 @@ import time
 from matplotlib import pyplot as plt
 from spark_env.canvas import *
 
-def dynamic(env:GraphWrapper, seed:int, aggregator:str):
+def dynamic(env:GraphWrapper, seed:int, aggregator:str, e:int):
     total_reward = 0
     done = False
     actions = 0
@@ -26,14 +26,13 @@ def dynamic(env:GraphWrapper, seed:int, aggregator:str):
         if done:
             break
     
-    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/dag_time_dynamic_makespan_"+aggregator+".png")
-    visualize_executor_usage(env.env.finished_job_dags, "./results/test/exec_time_dynamic_makespan_"+aggregator+".png")
+    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/"+str(e)+"_dag_time_dynamic_"+aggregator+".png")
+    visualize_executor_usage(env.env.finished_job_dags, "./results/test/"+str(e)+"exec_time_dynamic_"+aggregator+".png")
     
     print("---------------------------------------------------------------------------------------------")
     print("Dynamic Scheduling Baseline -", " Reward :", total_reward, " Actions :", actions, " Seed : ", seed)
     print("---------------------------------------------------------------------------------------------")
     return total_reward
-
 
 def agent_action(env:GraphWrapper, seed:int, agent:Agent, e:int, aggregator:str):
     total_reward = 0
@@ -62,14 +61,13 @@ def agent_action(env:GraphWrapper, seed:int, agent:Agent, e:int, aggregator:str)
             break
 
     
-    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/dag_time_makespan_"+aggregator+".png")
-    visualize_executor_usage(env.env.finished_job_dags, "./results/test/exec_time_makespan_"+aggregator+".png")
+    visualize_dag_time_save_pdf(env.env.finished_job_dags, env.env.executors, "./results/test/"+str(e)+"dag_time_"+aggregator+".png")
+    visualize_executor_usage(env.env.finished_job_dags, "./results/test/"+str(e)+"exec_time_"+aggregator+".png")
 
     print("episode reward : ", total_reward, "total action time : ", action_time, "total actions : ", actions)
     return total_reward
 
-
-def dqn_test(load_path="sched_net_mean_1.pt", episodes=25, aggregator="mean"):
+def dqn_test(load_path="final_models_mean/sched_net_2_mean.pt", episodes=25, aggregator="mean"):
     env = GraphWrapper()
     agent = Agent(aggregator=aggregator)
     # logger = MetricLogger(version="0_old", mode="test", aggregator=aggregator)
@@ -81,65 +79,28 @@ def dqn_test(load_path="sched_net_mean_1.pt", episodes=25, aggregator="mean"):
     # for calculating cdf for dynamic and agent actions
     dynamic_rewards = []
     agent_rewards = []
-
+    seeds = [8738,  9029, 182, 9832, 9335, 3162, 10212, 10523, 12083, 1380, 887, 1304, 6905, 7318, 7634, 4422, 5597, 8190, 10023, 11435, 7639, 3308, 12014, 906, 6027]
     for e in range(episodes):
-        seed = randint(12345)
-        dynamic_rewards.append(dynamic(env, seed, aggregator))
+        seed = seeds[e]
+        dynamic_rewards.append(dynamic(env, seed, aggregator, e))
         agent_rewards.append(agent_action(env, seed, agent, e, aggregator))
 
     return dynamic_rewards, agent_rewards
 
+# comment this line to stop testing with mean aggregator
+r1, r2 = dqn_test(load_path="final_models_mean/sched_net_2_mean.pt", episodes=25, aggregator="mean")
 
-r1, r2 = dqn_test(load_path="old_models/sched_net_1_mean.pt", episodes=25, aggregator="mean")
-# r1, r2 = dqn_test(load_path="sched_net_pool_1.pt", episodes=25, aggregator="pool")
-count_1, bins_1 = np.histogram(np.array(r1), bins=10)
-pdf_1 = count_1 / sum(count_1)
-cdf_1 = np.cumsum(pdf_1)
+# uncomment this line to test with pool aggregator 
+# r1, r2 = dqn_test(load_path="final_models_pool/sched_net_pool_1.pt", episodes=25, aggregator="pool")
 
-count_2, bins_2 = np.histogram(np.array(r2), bins=10)
-pdf_2 = count_2 / sum(count_2)
-cdf_2 = np.cumsum(pdf_2)
 
-plt.plot(bins_1[1:], cdf_1, color="red", label="Dynamic Sched")
-plt.plot(bins_2[1:], cdf_2, label="GNN sched")
-plt.legend()
-plt.savefig('./results/cdf_combined_mean_1.png')
-
-# ------------------------------------------------------------------------------------------------------------ #
-#                                                Env Test
-# ------------------------------------------------------------------------------------------------------------ #
-# def test_env():
-#     episodes = 1
-#     env = GraphWrapper()
-#     total_reward = 0
-#     total_actions = 0
-#     for e in range(episodes):
-
-#         env.reset()
-#         state = env.observe()
-#         done = False
-#         episode_reward = 0
-#         actions = 0
-#         start = time.time()
-
-#         # Run the simulation
-#         while True:
-
-#             state, node_inputs, leaf_nodes = state
-            
-#             # Agent performs action
-#             next_state, reward, done = env.step((leaf_nodes[0], 1), False)
-
-#             # Update state
-#             state = next_state
-#             episode_reward += reward
-#             actions += 1
-#             if done:
-#                 print("episode : ",e, "episode reward", episode_reward, "actions", actions, "time", time.time()-start)
-#                 break
-        
-#         total_reward += episode_reward
-#         total_actions += actions
-#         print("Average Reward :", total_reward/(e+1), "Average Length :", total_actions/(e+1))
-
-# test_env()
+fig = plt.figure()
+ax = fig.add_subplot(111)
+x, y = compute_CDF(r1)
+ax.plot(x, y, color="red", label="Dynamic Sched")
+x, y = compute_CDF(r2)
+ax.plot(x, y, label="GNN Sched")
+plt.xlabel('Total reward')
+plt.ylabel('CDF')
+plt.legend(["Dynamic Sched", "GNN Sched"])
+fig.savefig('./results/cdf_combined_pool_1.png')
