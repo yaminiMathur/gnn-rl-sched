@@ -58,7 +58,7 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=10
             if done:
                 break
         
-        agent.save(version)
+        #agent.save(version)
         torch.cuda.empty_cache()
         logger.log_episode()
 
