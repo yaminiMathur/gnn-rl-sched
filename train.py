@@ -1,8 +1,11 @@
 from numpy import load
 from environment_wrapper import *
-from dqn import Agent, MetricLogger
+from udrl import *
 from numpy.random import randint
 import time
+
+#from udrl import Agent, GCN, MetricLogger, ReplayBuffer
+
 
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                  DQN
@@ -11,6 +14,45 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=10
     env    = GraphWrapper()
     agent  = Agent(aggregator=aggregator)
     logger = MetricLogger(version=str(version), mode="train", aggregator=aggregator)
+
+    if buffer is None:
+        buffer = initialize_replay_buffer(replay_size, 
+                                          n_warm_up_episodes, 
+                                          last_few)
+    
+    if behavior is None:
+        behavior = initialize_behavior_function(state_size, 
+                                                action_size, 
+                                                hidden_size, 
+                                                learning_rate, 
+                                                [return_scale, horizon_scale])
+    
+    for i in range(1, n_main_iter+1):
+        mean_loss = train_behavior(behavior, buffer, n_updates_per_iter, batch_size)
+        
+        print('Iter: {}, Loss: {:.4f}'.format(i, mean_loss), end='\r')
+        
+        # Sample exploratory commands and generate episodes
+        generate_episodes(env, 
+                          behavior, 
+                          buffer, 
+                          n_episodes_per_iter,
+                          last_few)
+        
+        if i % evaluate_every == 0:
+            command = sample_command(buffer, last_few)
+            mean_return = evaluate_agent(env, behavior, command)
+            
+            learning_history.append({
+                'training_loss': mean_loss,
+                'desired_return': command[0],
+                'desired_horizon': command[1],
+                'actual_return': mean_return,
+            })
+            
+            if stop_on_solved and mean_return >= target_return: 
+                break
+    
 
     # load the presaved model
     if load_path:
@@ -34,9 +76,9 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=10
             # Assist based on probability 
             if randint(0, 100) < prob:
                 index = env.auto_step()
-                action = agent.act(state, (index, 2))
+                action = agent.action(state, (index, 2), )
             else:
-                action = agent.act(state)
+                action = agent.greedy_action(state)
  
             # Agent performs action
             next_state, reward, done = env.step(action, False)
@@ -58,7 +100,7 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=10
             if done:
                 break
         
-        #agent.save(version)
+        agent.save(version)
         torch.cuda.empty_cache()
         logger.log_episode()
 
