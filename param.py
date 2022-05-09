@@ -29,6 +29,8 @@ class Args() :
         self.learn_every = 3
         self.sync_every = 1e3
         self.exploration_rate_decay = 0.999992
+        print("Parameters for Environment and Agent set successfully.")
 
 
 args = Args()
+print("Arguments function called successfully.")

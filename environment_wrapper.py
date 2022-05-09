@@ -11,7 +11,10 @@ cuda = args.cuda
 
 class GraphWrapper:
     
+    print("Entered GraphWrapper class.")
+
     def __init__(self, reset_prob=5e-7) -> None:
+        print("Entered GraphWrapper.")
 
         # Set pre built environment
         self.env = Environment()

@@ -1,16 +1,21 @@
+print("Importing Libraries... ")
 from numpy import load
 from environment_wrapper import *
-from udrl import *
+from udrl import Agent, ReplayBuffer, MetricLogger
 from numpy.random import randint
 import time
-
-#from udrl import Agent, GCN, MetricLogger, ReplayBuffer
+print("------------------------------------------------------------------------------------------------------------")
+print("                                                  UDRL")
+print("------------------------------------------------------------------------------------------------------------")
 
 
 # ------------------------------------------------------------------------------------------------------------ #
-#                                                  DQN
+#                                                  UDRL
 # ------------------------------------------------------------------------------------------------------------ #
+print("!!! Entered training file !!!")
+
 def udrl_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=100, exp_rate=True, new_rate=None):
+    print("Entered the main UDRL training loop.")
     env    = GraphWrapper()
     agent  = Agent(aggregator=aggregator)
     logger = MetricLogger(version=str(version), mode="train", aggregator=aggregator)

@@ -9,7 +9,7 @@ from torch.distributions import Categorical
 from collections import namedtuple
 
 class Agent():
-
+    print("Entered Agent class.")
     # Helper function to create episodes as namedtuple
     make_episode = namedtuple('Episode', 
                             field_names=['states', 
@@ -290,6 +290,7 @@ class Agent():
 
 ### Replay Buffer
 class ReplayBuffer():
+    print("Entered Replay Buffer.")
     '''
     Replay buffer containing a fixed maximun number of trajectories with 
     the highest returns seen so far
@@ -372,7 +373,9 @@ class ReplayBuffer():
         return len(self.buffer)
 
 class MetricLogger():
+    print("Entered Metric Logger class.")
     def __init__(self, save_dir="./results", mode="train", version="0", aggregator="mean"):
+        print("Initializing Metric Logger.")
         save_dir = save_dir+"/"+mode
         self.save_log = save_dir + "/episodes_"+aggregator+"_"+version+".log"
         with open(self.save_log, "w") as f:
@@ -428,6 +431,7 @@ class MetricLogger():
         self.init_episode()
 
     def init_episode(self):
+        print("Initialize episode.")
         self.curr_ep_reward = 0.0
         self.curr_ep_length = 0
         self.curr_ep_loss = 0.0
