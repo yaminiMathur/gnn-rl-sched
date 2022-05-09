@@ -10,15 +10,17 @@ import time
 # ------------------------------------------------------------------------------------------------------------ #
 #                                                  DQN
 # ------------------------------------------------------------------------------------------------------------ #
-def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=100, exp_rate=True, new_rate=None):
+def udrl_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=100, exp_rate=True, new_rate=None):
     env    = GraphWrapper()
     agent  = Agent(aggregator=aggregator)
     logger = MetricLogger(version=str(version), mode="train", aggregator=aggregator)
+    print("Environment, Agent, and Metric Logger instantiated successfully.\n")
 
     if buffer is None:
         buffer = initialize_replay_buffer(replay_size, 
                                           n_warm_up_episodes, 
                                           last_few)
+        print("Buffer initialized successfully.")
     
     if behavior is None:
         behavior = initialize_behavior_function(state_size, 
@@ -26,6 +28,8 @@ def dqn_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=10
                                                 hidden_size, 
                                                 learning_rate, 
                                                 [return_scale, horizon_scale])
+    print("Behavior initialized successfully.")
+
     
     for i in range(1, n_main_iter+1):
         mean_loss = train_behavior(behavior, buffer, n_updates_per_iter, batch_size)
