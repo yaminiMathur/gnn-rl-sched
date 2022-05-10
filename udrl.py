@@ -11,6 +11,63 @@ from collections import namedtuple
 class Agent():
 
     print("Entered Agent!")
+    ### Hyperparameters ###
+
+    # Number of iterations in the main loop
+    n_main_iter = 700
+
+    # Number of (input, target) pairs per batch used for training the behavior function
+    batch_size = 768
+
+    # Scaling factor for desired horizon input
+    horizon_scale = 0.01
+
+    # Number of episodes from the end of the replay buffer used for sampling exploratory
+    # commands
+    last_few = 75
+
+    # Learning rate for the ADAM optimizer
+    learning_rate = 0.0003
+
+    # Number of exploratory episodes generated per step of UDRL training
+    n_episodes_per_iter = 20
+
+    # Number of gradient-based updates of the behavior function per step of UDRL training
+    n_updates_per_iter = 100
+
+    # Number of warm up episodes at the beginning of training
+    n_warm_up_episodes = 10
+
+    # Maximum size of the replay buffer (in episodes)
+    replay_size = 500
+
+    # Scaling factor for desired return input
+    return_scale = 0.02
+
+    # Evaluate the agent after `evaluate_every` iterations
+    evaluate_every = 10
+
+    # Target return before breaking out of the training loop
+    target_return = 200
+
+    # Maximun reward given by the environment
+    max_reward = 250
+
+    # Maximun steps allowed
+    max_steps = 300
+
+    # Reward after reaching `max_steps` (punishment, hence negative reward)
+    max_steps_reward = -50
+
+    # Hidden units
+    hidden_size = 32
+
+    # Times we evaluate the agent
+    n_evals = 1
+
+    # Will stop the training when the agent gets `target_return` `n_evals` times
+    stop_on_solved = False
+    #######################
 
     def __init__(self, save_dir="./models", assist=True, assist_p=(1, 7), aggregator="mean"):
         print("Initializing Agent... ")
@@ -43,9 +100,9 @@ class Agent():
         self.gamma = args.gamma
 
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=args.lr)
-        self.loss_fn = torch.nn.SmoothL1Loss()
+        #self.loss_fn = torch.nn.SmoothL1Loss()
 
-        self.burnin = args.burnin            # min. experiences before training
+        #self.burnin = args.burnin            # min. experiences before training
         self.learn_every = args.learn_every  # no. of experiences between updates to Q_online
         self.sync_every = args.sync_every    # no. of experiences between Q_target & Q_online sync
 

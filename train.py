@@ -16,6 +16,65 @@ print("!!! Entered training file !!!")
 
 def udrl_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=100, exp_rate=True, new_rate=None):
     print("Entered the main UDRL training loop.")
+
+    ### Hyperparameters ###
+    ### Hyperparamters
+
+    # Number of iterations in the main loop
+    n_main_iter = 700
+
+    # Number of (input, target) pairs per batch used for training the behavior function
+    batch_size = 768
+
+    # Scaling factor for desired horizon input
+    horizon_scale = 0.01
+
+    # Number of episodes from the end of the replay buffer used for sampling exploratory
+    # commands
+    last_few = 75
+
+    # Learning rate for the ADAM optimizer
+    learning_rate = 0.0003
+
+    # Number of exploratory episodes generated per step of UDRL training
+    n_episodes_per_iter = 20
+
+    # Number of gradient-based updates of the behavior function per step of UDRL training
+    n_updates_per_iter = 100
+
+    # Number of warm up episodes at the beginning of training
+    n_warm_up_episodes = 10
+
+    # Maximum size of the replay buffer (in episodes)
+    replay_size = 500
+
+    # Scaling factor for desired return input
+    return_scale = 0.02
+
+    # Evaluate the agent after `evaluate_every` iterations
+    evaluate_every = 10
+
+    # Target return before breaking out of the training loop
+    target_return = 200
+
+    # Maximun reward given by the environment
+    max_reward = 250
+
+    # Maximun steps allowed
+    max_steps = 300
+
+    # Reward after reaching `max_steps` (punishment, hence negative reward)
+    max_steps_reward = -50
+
+    # Hidden units
+    hidden_size = 32
+
+    # Times we evaluate the agent
+    n_evals = 1
+
+    # Will stop the training when the agent gets `target_return` `n_evals` times
+    stop_on_solved = False
+    #######################
     env    = GraphWrapper()
     agent  = Agent(aggregator=aggregator)
     logger = MetricLogger(version=str(version), mode="train", aggregator=aggregator)
@@ -95,7 +154,7 @@ def udrl_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=1
             total_actions += 1
 
             # Remember
-            agent.cache(state, next_state, action[0], reward, done)
+            agent.initialize_replay_buffer(state, next_state, action[0], reward, done)
 
             # Learn
             q, loss = agent.learn_batch()
