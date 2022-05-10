@@ -9,16 +9,50 @@ from torch.distributions import Categorical
 from collections import namedtuple
 
 class Agent():
-    print("Entered Agent class.")
-    # Helper function to create episodes as namedtuple
-    make_episode = namedtuple('Episode', 
-                            field_names=['states', 
-                                        'actions', 
-                                        'rewards', 
-                                        'init_command', 
-                                        'total_return', 
-                                        'length', 
-                                        ])
+
+    print("Entered Agent!")
+
+    def __init__(self, save_dir="./models", assist=True, assist_p=(1, 7), aggregator="mean"):
+        print("Initializing Agent... ")
+            # Helper function to create episodes as namedtuple
+        make_episode = namedtuple('Episode', 
+                                field_names=['states', 
+                                            'actions', 
+                                            'rewards', 
+                                            'init_command', 
+                                            'total_return', 
+                                            'length', 
+                                            ])
+        self.save_dir = save_dir
+
+        # DNN to predict the most optimal action
+        self.net = Net(aggregator).float()
+        self.net = self.net.to(cuda)
+        self.aggregator = aggregator
+
+        self.exploration_rate = 1
+        self.exploration_rate_decay = args.exploration_rate_decay # 0.9999975 # 0.999992 
+        self.exploration_rate_min = 0.1
+        self.curr_step = 0
+
+        self.memory = deque(maxlen=100000)
+        self.batch_size = args.batch_size
+
+        self.save_every = 1e3  # no. of experiences
+
+        self.gamma = args.gamma
+
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=args.lr)
+        self.loss_fn = torch.nn.SmoothL1Loss()
+
+        self.burnin = args.burnin            # min. experiences before training
+        self.learn_every = args.learn_every  # no. of experiences between updates to Q_online
+        self.sync_every = args.sync_every    # no. of experiences between Q_target & Q_online sync
+
+        self.assist = assist
+        self.assist_range = assist_p
+        self.softmax = nn.Softmax()
+
     def load(self, file:str, new_rate=0.6):
         path = self.save_dir+"/"+file
         loaded_file = torch.load(path)
@@ -135,7 +169,6 @@ class Agent():
         return behavior
 
     ### Generate Episode
-
     def generate_episode(env, policy, init_command=[1, 1]):
         '''
         Generate an episode using the Behaviour function.
@@ -279,7 +312,7 @@ class Agent():
                     break
         
         return behavior, buffer, learning_history
-        
+
     def save(self, episode=0):
         save_path = (self.save_dir + f"/sched_net_{self.aggregator}_{episode}.pt")
         torch.save(
@@ -290,7 +323,6 @@ class Agent():
 
 ### Replay Buffer
 class ReplayBuffer():
-    print("Entered Replay Buffer.")
     '''
     Replay buffer containing a fixed maximun number of trajectories with 
     the highest returns seen so far
@@ -373,9 +405,7 @@ class ReplayBuffer():
         return len(self.buffer)
 
 class MetricLogger():
-    print("Entered Metric Logger class.")
     def __init__(self, save_dir="./results", mode="train", version="0", aggregator="mean"):
-        print("Initializing Metric Logger.")
         save_dir = save_dir+"/"+mode
         self.save_log = save_dir + "/episodes_"+aggregator+"_"+version+".log"
         with open(self.save_log, "w") as f:
@@ -431,7 +461,6 @@ class MetricLogger():
         self.init_episode()
 
     def init_episode(self):
-        print("Initialize episode.")
         self.curr_ep_reward = 0.0
         self.curr_ep_length = 0
         self.curr_ep_loss = 0.0
