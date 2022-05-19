@@ -14,7 +14,8 @@ print("-------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------------------ #
 print("!!! Entered training file !!!")
 
-def udrl_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=100, exp_rate=True, new_rate=None):
+#def udrl_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=100, exp_rate=True, new_rate=None):
+def udrl_train(load_path=None, episodes=31, version=0, aggregator="pool", prob=85, exp_rate=True, new_rate=None): 
     print("Entered the main UDRL training loop.")
     env    = GraphWrapper()
     agent  = Agent(aggregator=aggregator)
@@ -124,5 +125,6 @@ def udrl_train(load_path=None, episodes=31, version=0, aggregator="mean", prob=1
 # dqn_train(load_path="sched_net_pool_0.pt", episodes=50, version=1, aggregator="mean", prob=0, exp_rate=True)
 
 # uncomment below 2 lines and set decay = 0.999992 and burnin to 1e4 in params to train for pool
-# dqn_train(load_path=None, episodes=100, version=0, aggregator="pool", prob=85) # decay = 0.999992
-# dqn_train(load_path="sched_net_pool_0.pt", episodes=100, version=1, aggregator="pool", prob=85)
+#udrl_train(load_path=None, episodes=100, version=0, aggregator="pool", prob=85) # decay = 0.999992
+udrl_train(load_path=None, episodes=31, version=0, aggregator="pool", prob=85, exp_rate=True, new_rate=None) # decay = 0.999992
+udrl_train(load_path="sched_net_pool_0.pt", episodes=100, version=1, aggregator="pool", prob=85)

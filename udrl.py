@@ -1,12 +1,70 @@
 ### Import Libraries
+import copy
 import warnings
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import time, datetime
+from matplotlib import pyplot as plt
+from dgl.nn.pytorch import GraphConv
+from dgl.nn.pytorch import SAGEConv
+from numpy.random import randint
+import dgl
+from param import args
 from torch.optim import Adam
 from torch.distributions import Categorical
 from collections import namedtuple
+
+cuda = args.cuda
+
+
+class GCN(nn.Module):
+
+    def __init__(self, aggregator, features=5, hidden_layer_size=5, embedding_size=1):
+        super(GCN, self).__init__()
+        
+        # Simple Graph Conv 
+        # self.conv1 = GraphConv(in_feats=features, out_feats=hidden_layer_size)
+        # self.conv2 = GraphConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size)
+        # self.conv3 = GraphConv(in_feats=hidden_layer_size, out_feats=embedding_size)
+
+        # Using Graph SAGE to get embedding using the neighbours
+        self.conv1 = SAGEConv(in_feats=features, out_feats=hidden_layer_size, aggregator_type=aggregator)
+        self.conv2 = SAGEConv(in_feats=hidden_layer_size, out_feats=hidden_layer_size, aggregator_type=aggregator)
+        self.conv3 = SAGEConv(in_feats=hidden_layer_size, out_feats=embedding_size, aggregator_type=aggregator)
+
+    def forward(self, g, inputs):
+        h = inputs
+        h = self.conv1(g, h)
+        h = torch.sigmoid(h)
+        h = self.conv2(g, h)
+        h = torch.sigmoid(h)
+        h = self.conv3(g, h)
+        h = torch.sigmoid(h)
+
+        return h
+
+class Net(nn.Module):
+
+    def __init__(self, aggregator, features=5, hidden_layer_size=10, embedding_size=1):
+        super().__init__()
+        
+        # The GNN for online training and the target which gets updated 
+        # in a timely manner
+        self.online = GCN(aggregator, features, hidden_layer_size, embedding_size)
+        self.target = copy.deepcopy(self.online)
+
+        for p in self.target.parameters():
+            p.requires_grad = False
+
+    def forward(self, graph, node_input, model="online"):
+        if model == "online":
+            logits = self.online(graph, node_input)
+        else :
+            logits = self.target(graph, node_input)
+
+        return logits 
 
 class Agent():
 
@@ -43,9 +101,9 @@ class Agent():
         self.gamma = args.gamma
 
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=args.lr)
-        self.loss_fn = torch.nn.SmoothL1Loss()
+        #self.loss_fn = torch.nn.SmoothL1Loss()
 
-        self.burnin = args.burnin            # min. experiences before training
+        #self.burnin = args.burnin            # min. experiences before training
         self.learn_every = args.learn_every  # no. of experiences between updates to Q_online
         self.sync_every = args.sync_every    # no. of experiences between Q_target & Q_online sync
 
