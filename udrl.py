@@ -14,7 +14,7 @@ import dgl
 from param import args
 from torch.optim import Adam
 from torch.distributions import Categorical
-from collections import namedtuple
+from collections import namedtuple, deque
 
 cuda = args.cuda
 
@@ -54,11 +54,14 @@ class Net(nn.Module):
         # in a timely manner
         self.online = GCN(aggregator, features, hidden_layer_size, embedding_size)
         self.target = copy.deepcopy(self.online)
+        #self.network = GCN()
 
         for p in self.target.parameters():
             p.requires_grad = False
 
     def forward(self, graph, node_input, model="online"):
+        # remove model argument 
+        # logits = self.network(grpah, node_input)
         if model == "online":
             logits = self.online(graph, node_input)
         else :
@@ -179,6 +182,7 @@ class Agent():
         self.net.eval()
 
 
+    # move to Net class --> see what state_fn is doing and command_fn is doing 
     def forward(self, state, command):
         '''Forward pass
         
@@ -622,3 +626,15 @@ class MetricLogger():
             plt.savefig(getattr(self, f"{metric}_plot"))
             plt.clf()
 
+
+
+
+# He has a class for behaviour -> behaviour is generally defined by a neural network.
+# He has multiple steps to calculate state and command embeddings
+# Which he passes through an output neural network
+# In our case, we have an Net defining just the neural network, This will have the forward part 
+# Here define what you want to do for state and command like what he has done
+# In out case agent will have the action, greedy action, load, save, and udrl
+# Please figure out what each line does --- Comment on every line if needed, google package name and see what it is used for
+# if you don't understand
+# Correlate what he has done with what You should. If you feel that his method is easier --> go with it ( and follow only one convention)
