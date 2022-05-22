@@ -1,7 +1,9 @@
 print("Importing Libraries... ")
 from numpy import load
 from environment_wrapper import *
-from udrl import Agent, ReplayBuffer, MetricLogger
+from udrl import GCN, ReplayBuffer, MetricLogger
+from agent import Agent
+from behavior import Behavior
 from numpy.random import randint
 import time
 print("------------------------------------------------------------------------------------------------------------")
@@ -79,6 +81,7 @@ def udrl_train(load_path=None, episodes=31, version=0, aggregator="pool", prob=8
     env    = GraphWrapper()
     agent  = Agent(aggregator=aggregator)
     logger = MetricLogger(version=str(version), mode="train", aggregator=aggregator)
+    buffer = None
     print("Environment, Agent, and Metric Logger instantiated successfully.\n")
 
     if buffer is None:
