@@ -1,7 +1,4 @@
 ### Import Libraries
-from mimetypes import init
-from multiprocessing.dummy import Array
-from tkinter import RADIOBUTTON
 from typing import List, Tuple
 import warnings
 import torch
@@ -10,7 +7,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from torch.distributions import Categorical
 from numpy import array, load
-from numpy.random import randint
+import random
 from environment_wrapper import *
 from dgl.nn.pytorch import SAGEConv
 import dgl
@@ -57,7 +54,7 @@ class GCN(nn.Module):
 ### Behavior Function
 class Behaviour():
     
-    def __init__(self, aggregator, features=5, hidden_layer_size=5, 
+    def __init__(self, aggregator='pool', features=5, hidden_layer_size=5, 
                 embedding_size=10, command_scale = [1, 1], device='cpu', prob=0):
 
         super().__init__()
@@ -71,11 +68,11 @@ class Behaviour():
         # Using Graph SAGE to get embedding for the graph
         self.gcn = GCN(aggregator, features, hidden_layer_size, embedding_size, device)
         # Use a sequential layer to get ecoding of the reward and command
-        self.command_fn = nn.Sequential(nn.Linear(2, 20)).to(device)
+        self.command_fn = nn.Sequential(nn.Linear(2, embedding_size)).to(device)
 
         # Output function
         self.output_nn = nn.Sequential(
-            nn.Linear(20, 32),
+            nn.Linear(embedding_size, 32),
             nn.Sigmoid(),
 
             nn.Linear(32, 32),
@@ -113,15 +110,31 @@ class Behaviour():
     # TODO add state before forward
     # TODO command mul ?,
     def action(self, G, node_inputs, leaf_nodes, command):
-        gnn_embeddings = self.get_gnn_embeddings(G.to(self.device), node_inputs.to(self.device))
+        gnn_embeddings = self.get_gnn_embeddings(dgl.batch(G).to(self.device), node_inputs.to(self.device))
+        leaf_embeddings = []
 
-        leaf_embeddings = gnn_embeddings[leaf_nodes]
-        graph_state = torch.sum(leaf_embeddings, -2)
+        print(command)
 
-        logits = self.forward(torch.cat((leaf_embeddings, graph_state), command))
-        probs = F.softmax(logits)
-        dist = Categorical(probs)
-        return dist.sample().item()
+        # prev = 0
+        # current = 0
+        # for g, l in zip(G, leaf_nodes) :
+        #     current += g.number_of_nodes()
+        #     g_embeddings = gnn_embeddings[prev:current]
+        #     leaf_embeddings.append(g_embeddings[l])
+        #     prev = current
+
+        # for embedding, leaves in zip(gnn_embeddings, leaf_nodes):
+        #     print(embedding, leaves)
+        #     leaf_embeddings = embedding[leaves]
+        #     graph_state = torch.sum(leaf_embeddings, -2)
+        #     combined_input.append(torch.cat([leaf_embeddings, graph_state]))
+
+        # print(combined_input)
+        raise Exception 
+        # logits = self.forward(torch.cat((leaf_embeddings, graph_state), command))
+        # probs = F.softmax(logits)
+        # dist = Categorical(probs)
+        # return dist.sample().item()
     
     # Compute the best action based on the highest current probabilities
     def greedy_action(self, state, command):
@@ -134,8 +147,8 @@ class Behaviour():
     # Get the random action for state
     def random_action(self, env:GraphWrapper):
         G, node_inputs, leaf_nodes = env.observe()
-        action = (randint(len(leaf_nodes)), 1)
-        if randint(0, 100) < self.prob :
+        action = leaf_nodes[(random.randint(0, len(leaf_nodes)-1))]
+        if random.randint(0, 100-1) < self.prob :
             action = env.auto_step()
         return action
 
@@ -176,15 +189,14 @@ class Episode :
             graph_list.append(G)
             node_input_list.append(node_inputs)
             leaf_node_list.append(leaf_nodes)
-            action_list.append(action)
+            action_list.append(torch.FloatTensor([action]))
             reward_sum += reward
-
-        return dgl.batch(graph_list), torch.cat(node_input_list), torch.stack(action_list), leaf_node_list, reward_sum
+        return graph_list, torch.cat(node_input_list), torch.stack(action_list), leaf_node_list, reward_sum
 
     def sample(self):
         total_len = len(self.list)
-        start = np.random.randint(total_len)
-        end = np.random.randint(start+1, total_len)
+        start = random.randint(0, total_len-2)
+        end = random.randint(start+1, total_len-1)
         horizon = end-start
         graphs, inputs, actions, leaves, tot_reward = self.create_batch(self.list[start:end])
         return graphs, inputs, actions, leaves, [tot_reward, horizon]
@@ -209,7 +221,7 @@ class Memory:
         return self.buffer[-num:]
     
     def sample(self, batch_size):
-        return np.random.sample(self.buffer, batch_size)
+        return np.random.choice(self.buffer, size=batch_size)
     
     def sort(self):
         self.buffer.sort()
@@ -221,29 +233,36 @@ class Memory:
 
 class Trainer : 
 
-    def __init__(self, optimizer=Adam, lr=0.003) -> None:
+    def __init__(self, device, optimizer=Adam, lr=0.003, mem_size=10) -> None:
         self.memory = Memory()
-        self.behaviour = Behaviour()
+        self.behaviour = Behaviour(device=device)
         self.env = GraphWrapper()
         self.optimizer = optimizer
+        print("Generating training data")
+        for i in range(mem_size):
+            self.memory.add_episode(self.run_episode())
+        print("completed generating training data")
 
-    def run_episode(self, policy=RANDOM, init_command=[0, 1000], seed=None):
+    def run_episode(self, policy=RANDOM, init_command=[0, 1000], seed=None, max_steps=100):
         episode = Episode(init_command=init_command)
         command = init_command.copy()
         if not seed :
-            seed = np.random.randint(10000, 100000)
+            seed = random.randint(10000, 100000)
         
         print("Seed : ", seed)
         self.env.reset(seed)
-        state, reward, done = self.env.observe()
+        state = self.env.observe()
+        done = False
+        step = 0
 
-        while not done :
+        print("Started episode")
+        while not done and  step < max_steps:
 
             index = None
             action = None
             if policy == RANDOM :
                 index = self.behaviour.random_action(self.env)
-                action = (index, 1)
+                action = (index, 2)
             elif policy == BEHAVIOUR_ACT :
                 index = self.behaviour.action(state, command)
                 action =  (index, 1)
@@ -255,28 +274,36 @@ class Trainer :
             if episode.time_steps > MAX_STEPS :
                 done = True
                 reward = MAX_STEPS_REWARD
-            episode.add_iteration([state, index, reward])
+            
+            G, node_inputs, leaf_nodes = state  
+            episode.add_iteration([G, node_inputs, leaf_nodes, index, reward])
 
             state = next_state
             command[0] = min(command[0]-reward, MAX_REWARD) # desired reward
             command[1] = max(command[1]-1, 1)               # desired time frame
-
+            step += 1
+        
+        print("Ended episode")
         return episode
 
-
-    def train(self, steps:int):
+    def train(self, steps:int, batch_size=1):
         loss_list = []
+        print("started training batches")
         for step in range(steps):
-            episodes = self.memory.sample()
+            print("Batch :", step)
+            episodes = self.memory.sample(batch_size)
             for episode in episodes:
+                print("Episode started")
                 graphs, inputs, actions, leaves, command = episode.sample()
                 new_predictions = self.behaviour.action(graphs, inputs, leaves, command)
-                loss = F.cross_entropy(new_predictions, actions)
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-                loss_list.append(loss.item())
+                # loss = F.cross_entropy(new_predictions, actions)
+                # self.optimizer.zero_grad()
+                # loss.backward()
+                # self.optimizer.step()
+                # loss_list.append(loss.item())
+                print("Episode ended")
+            print("Batch Complete", step)
+        print("training batch complete")
 
-
-
- 
+trainer = Trainer(device='cuda', mem_size=1)
+trainer.train(steps=1)
