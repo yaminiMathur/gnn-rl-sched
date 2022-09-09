@@ -107,29 +107,41 @@ class Behaviour():
         return self.output_nn(product)
     
     # Compute the action from a state and command : 
-    # TODO add state before forward
-    # TODO command mul ?,
     def action(self, G, node_inputs, leaf_nodes, command):
+        # compute embeddings for the graph and the commands
         gnn_embeddings = self.get_gnn_embeddings(dgl.batch(G).to(self.device), node_inputs.to(self.device))
-        leaf_embeddings = []
+        encoded_command = self.command_fn(torch.tensor(command).to(self.device))
+        actions = []
 
-        print(command)
+        prev = 0
+        current = 0
+        for g, l in zip(G, leaf_nodes) :
+            current += g.number_of_nodes()
+            # seperate current graph
+            g_embeddings = gnn_embeddings[prev:current]
+            # get only leaf nodes
+            g_embeddings = g_embeddings[l]
+            # add the encoded command to the leaf embeddings
+            g_embeddings += encoded_command
+            # pass the combined embeddings into the outtput neural network
+            g_embeddings = self.output_nn(g_embeddings)
+            # flatten the output of the neural network
+            g_embeddings = torch.reshape(g_embeddings, (-1,))
+            # append embeddings to actions after softmax
+            actions.append(F.softmax(g_embeddings))
 
-        # prev = 0
-        # current = 0
-        # for g, l in zip(G, leaf_nodes) :
-        #     current += g.number_of_nodes()
-        #     g_embeddings = gnn_embeddings[prev:current]
-        #     leaf_embeddings.append(g_embeddings[l])
+        print(actions)
+
+        #     action = torch.reshape(action, (-1,))
+        #     print(action)
+        #     print("-------------------------------------------------------------------")
+        #     action = F.normalize(action)
+        #     print(action)
+        #     actions.append(F.softmax(action))
         #     prev = current
+        #     break
 
-        # for embedding, leaves in zip(gnn_embeddings, leaf_nodes):
-        #     print(embedding, leaves)
-        #     leaf_embeddings = embedding[leaves]
-        #     graph_state = torch.sum(leaf_embeddings, -2)
-        #     combined_input.append(torch.cat([leaf_embeddings, graph_state]))
-
-        # print(combined_input)
+        # print(actions)
         raise Exception 
         # logits = self.forward(torch.cat((leaf_embeddings, graph_state), command))
         # probs = F.softmax(logits)
@@ -196,7 +208,7 @@ class Episode :
     def sample(self):
         total_len = len(self.list)
         start = random.randint(0, total_len-2)
-        end = random.randint(start+1, total_len-1)
+        end = min(random.randint(start+1, start+25), total_len-1)
         horizon = end-start
         graphs, inputs, actions, leaves, tot_reward = self.create_batch(self.list[start:end])
         return graphs, inputs, actions, leaves, [tot_reward, horizon]
