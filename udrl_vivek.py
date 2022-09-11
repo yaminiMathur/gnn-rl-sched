@@ -55,7 +55,7 @@ class GCN(nn.Module):
 class Behaviour(nn.Module):
     
     def __init__(self, aggregator='pool', features=5, hidden_layer_size=5, 
-                embedding_size=10, command_scale = [1, 1], device='cpu', prob=0):
+                embedding_size=10, command_scale = [1, 1], device='cpu', prob=10):
 
         super().__init__()
 
@@ -131,7 +131,7 @@ class Behaviour(nn.Module):
         # add the encoded command to the gnn embeddings
         embeddings = self.forward(G, node_inputs, leaf_nodes, command)
         embeddings = embeddings.flatten()
-        return embeddings.argmax().item()
+        return leaf_nodes[embeddings.argmax().item()]
 
     # Compute the best action based on the highest current probabilities
     def greedy_action(self, state, command):
@@ -230,7 +230,7 @@ class Memory:
 
 class Trainer : 
 
-    def __init__(self, device, optimizer=Adam, lr=0.003, mem_size=10) -> None:
+    def __init__(self, device, optimizer=Adam, lr=0.003, mem_size=50) -> None:
         self.memory = Memory()
         self.behaviour = Behaviour(device=device)
         self.env = GraphWrapper()
@@ -241,7 +241,7 @@ class Trainer :
             self.memory.add_episode(self.run_episode())
         print("completed generating training data")
 
-    def run_episode(self, policy=RANDOM, init_command=[0, 1000], seed=None, max_steps=100):
+    def run_episode(self, policy=RANDOM, init_command=[0, 0], seed=None, max_steps=500):
         episode = Episode(init_command=init_command)
         command = init_command.copy()
         if not seed :
@@ -260,7 +260,7 @@ class Trainer :
             action = None
             if policy == RANDOM :
                 index = self.behaviour.random_action(self.env)
-                action = (index, 2)
+                action = (index, 1)
             elif policy == BEHAVIOUR_ACT :
                 index = self.behaviour.action(state, command)
                 action =  (index, 1)
@@ -284,7 +284,7 @@ class Trainer :
         print("Ended episode")
         return episode
 
-    def train(self, steps:int, batch_size=1):
+    def train_batch(self, steps:int, batch_size=1):
         loss_list = []
         print("started training batches")
         for step in range(steps):
@@ -298,12 +298,14 @@ class Trainer :
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                print(loss.item())
-                raise Exception
                 loss_list.append(loss.item())
                 print("Episode ended")
             print("Batch Complete", step)
         print("training batch complete")
 
+
+# initialize buffer --> random policy
+# subsequent generate episode --> stochastic policy
+# run over and over again for multiple iterations
 trainer = Trainer(device='cuda', mem_size=1)
-trainer.train(steps=1)
+trainer.train_batch(steps=1)
