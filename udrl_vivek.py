@@ -52,7 +52,7 @@ class GCN(nn.Module):
 # -------------------------------------------------------------------------------------------------
 
 ### Behavior Function
-class Behaviour():
+class Behaviour(nn.Module):
     
     def __init__(self, aggregator='pool', features=5, hidden_layer_size=5, 
                 embedding_size=10, command_scale = [1, 1], device='cpu', prob=0):
@@ -81,7 +81,8 @@ class Behaviour():
             nn.Linear(32, 32),
             nn.Sigmoid(),
 
-            nn.Linear(32, 1)
+            nn.Linear(32, 1),
+            nn.Sigmoid()
         ).to(device)
     
     #  Neural Network -
@@ -94,60 +95,44 @@ class Behaviour():
     #  [input - 32] -- layer 3 (sigmoid) -- [output - 32]
     #  [input - 32] -- layer 4 (sigmoid) -- [output - 1] -- Probability of scheduling node
 
-    # Get the embeddings for all nodes    
-    def get_gnn_embeddings(self, g, inputs):
-        # Graph input to get embedding
-        return self.gcn(g, inputs)
-
     # forward propagation for the neural network
-    def forward(self, gnn_embedding, command):
-        # Encode the the command values, multiply and pass through output layer
-        command = self.command_fn(command)
-        product = torch.mul(gnn_embedding, command)
-        return self.output_nn(product)
-    
-    # Compute the action from a state and command : 
-    def action(self, G, node_inputs, leaf_nodes, command):
-        # compute embeddings for the graph and the commands
-        gnn_embeddings = self.get_gnn_embeddings(dgl.batch(G).to(self.device), node_inputs.to(self.device))
+    def forward(self, G, node_inputs, leaves, command):
+        # Get the gnn embedding of the graph
+        gnn_embeddings = self.gcn(dgl.batch(G).to(self.device), node_inputs.to(self.device))
+        # compute the encoding of the commnd
         encoded_command = self.command_fn(torch.tensor(command).to(self.device))
-        actions = []
+        leaf_embeddings = []
 
+        # filter out the leaf nodes
         prev = 0
         current = 0
-        for g, l in zip(G, leaf_nodes) :
+        for g, l in zip(G, leaves):
             current += g.number_of_nodes()
             # seperate current graph
             g_embeddings = gnn_embeddings[prev:current]
-            # get only leaf nodes
-            g_embeddings = g_embeddings[l]
-            # add the encoded command to the leaf embeddings
-            g_embeddings += encoded_command
-            # pass the combined embeddings into the outtput neural network
-            g_embeddings = self.output_nn(g_embeddings)
-            # flatten the output of the neural network
-            g_embeddings = torch.reshape(g_embeddings, (-1,))
-            # append embeddings to actions after softmax
-            actions.append(F.softmax(g_embeddings))
+            # filter out only the leaves and append to list
+            leaf_embeddings.append(g_embeddings[l])
+            # change the new prev
+            prev = current
 
-        print(actions)
-
-        #     action = torch.reshape(action, (-1,))
-        #     print(action)
-        #     print("-------------------------------------------------------------------")
-        #     action = F.normalize(action)
-        #     print(action)
-        #     actions.append(F.softmax(action))
-        #     prev = current
-        #     break
-
-        # print(actions)
-        raise Exception 
-        # logits = self.forward(torch.cat((leaf_embeddings, graph_state), command))
-        # probs = F.softmax(logits)
-        # dist = Categorical(probs)
-        # return dist.sample().item()
+        # assign the graph embeddings with the current leaf embeddings
+        gnn_embeddings = torch.cat(leaf_embeddings)
+        # compute the product with command as per upside down RL and pass 
+        # it through the output function
+        product = torch.mul(gnn_embeddings, encoded_command)
+        return self.output_nn(product)
     
+    # Compute the action from a state and command
+    # Note: this is only for computing a single action and not for training
+    def action(self, state, command):
+        G, node_inputs, leaf_nodes = state
+        shape = node_inputs.shape
+        assert len(shape) < 2 or shape[1] == 1
+        # add the encoded command to the gnn embeddings
+        embeddings = self.forward(G, node_inputs, leaf_nodes, command)
+        embeddings = embeddings.flatten()
+        return embeddings.argmax().item()
+
     # Compute the best action based on the highest current probabilities
     def greedy_action(self, state, command):
         G, node_inputs, leaf_nodes = state
@@ -166,13 +151,11 @@ class Behaviour():
 
     # save the model parameters
     def save(self, filename):
-        torch.save(self.gcn.state_dict, "gnn_params_"+filename)
-        torch.save(self.output_nn.state_dict(), "agent_params_"+filename)
+        torch.save(self.state_dict, "behaviour_"+filename)
     
     # load model parameters
     def load(self, filename):
-        self.output_nn.state_dict(torch.load("gnn_params_"+filename))
-        self.gcn.state_dict(torch.load("agent_params_"+filename))
+        self.state_dict(torch.load("behaviour_"+filename))
 
 # -----------------------------------------------------------------------------------------------------
 
@@ -201,9 +184,11 @@ class Episode :
             graph_list.append(G)
             node_input_list.append(node_inputs)
             leaf_node_list.append(leaf_nodes)
-            action_list.append(torch.FloatTensor([action]))
+            action_list.append(torch.FloatTensor([int(action == leaf) for leaf in leaf_nodes]))
             reward_sum += reward
-        return graph_list, torch.cat(node_input_list), torch.stack(action_list), leaf_node_list, reward_sum
+        action_list = torch.cat(action_list)
+        action_shape = action_list.shape
+        return graph_list, torch.cat(node_input_list), torch.reshape(action_list, (action_shape[0], 1)), leaf_node_list, reward_sum
 
     def sample(self):
         total_len = len(self.list)
@@ -249,7 +234,8 @@ class Trainer :
         self.memory = Memory()
         self.behaviour = Behaviour(device=device)
         self.env = GraphWrapper()
-        self.optimizer = optimizer
+        self.optimizer = optimizer(self.behaviour.parameters(), lr=lr)
+        self.device = device
         print("Generating training data")
         for i in range(mem_size):
             self.memory.add_episode(self.run_episode())
@@ -307,12 +293,14 @@ class Trainer :
             for episode in episodes:
                 print("Episode started")
                 graphs, inputs, actions, leaves, command = episode.sample()
-                new_predictions = self.behaviour.action(graphs, inputs, leaves, command)
-                # loss = F.cross_entropy(new_predictions, actions)
-                # self.optimizer.zero_grad()
-                # loss.backward()
-                # self.optimizer.step()
-                # loss_list.append(loss.item())
+                new_predictions = self.behaviour(graphs, inputs, leaves, command)
+                loss = F.cross_entropy(new_predictions, actions.to(self.device))
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+                print(loss.item())
+                raise Exception
+                loss_list.append(loss.item())
                 print("Episode ended")
             print("Batch Complete", step)
         print("training batch complete")
