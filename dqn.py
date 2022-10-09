@@ -296,13 +296,13 @@ class MetricLogger:
             )
         self.ep_rewards_plot = save_dir + "/reward_plot_"+aggregator+"_"+version+".png"
         self.ep_lengths_plot = save_dir + "/length_plot_"+aggregator+"_"+version+".png"
-        #self.ep_avg_losses_plot = save_dir + "/loss_plot_"+aggregator+"_"+version+".png"
+        self.ep_avg_losses_plot = save_dir + "/loss_plot_"+aggregator+"_"+version+".png"
         self.ep_avg_qs_plot = save_dir + "/q_plot_"+aggregator+"_"+version+".png"
 
         # History metrics
         self.ep_rewards = []
         self.ep_lengths = []
-        #self.ep_avg_losses = []
+        self.ep_avg_losses = []
         self.ep_avg_qs = []
 
         # Moving averages, added for every call to record()
@@ -320,22 +320,22 @@ class MetricLogger:
     def log_step(self, reward, q):
         self.curr_ep_reward += reward
         self.curr_ep_length += 1
-        # if loss:
-        #     self.curr_ep_loss += loss
-        #     self.curr_ep_q += q
-        #     self.curr_ep_loss_length += 1
+        if loss:
+            self.curr_ep_loss += loss
+            self.curr_ep_q += q
+            self.curr_ep_loss_length += 1
 
     def log_episode(self):
         "Mark end of episode"
         self.ep_rewards.append(self.curr_ep_reward)
         self.ep_lengths.append(self.curr_ep_length)
-        # if self.curr_ep_loss_length == 0:
-        #     ep_avg_loss = 0
-        #     ep_avg_q = 0
-        # else:
-        #     ep_avg_loss = np.round(self.curr_ep_loss / self.curr_ep_loss_length, 5)
-        #     ep_avg_q = np.round(self.curr_ep_q / self.curr_ep_loss_length, 5)
-        # self.ep_avg_losses.append(ep_avg_loss)
+        if self.curr_ep_loss_length == 0:
+            ep_avg_loss = 0
+            ep_avg_q = 0
+        else:
+            ep_avg_loss = np.round(self.curr_ep_loss / self.curr_ep_loss_length, 5)
+            ep_avg_q = np.round(self.curr_ep_q / self.curr_ep_loss_length, 5)
+        self.ep_avg_losses.append(ep_avg_loss)
         self.ep_avg_qs.append(ep_avg_q)
 
         self.init_episode()
