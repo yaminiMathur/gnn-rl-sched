@@ -1,6 +1,7 @@
 ### Import Libraries
 from asyncio.log import logger
 from dataclasses import replace
+from email import policy
 from typing import List, Tuple
 import warnings
 import torch
@@ -95,50 +96,20 @@ class Behaviour(nn.Module):
     #  [input - 32] -- layer 3 (sigmoid) -- [output - 32]
     #  [input - 32] -- layer 4 (sigmoid) -- [output - 1] -- Probability of scheduling node
 
-    # forward propagation for the neural network
-    def forward(self, G, node_inputs, leaves, command):
-        # Get the gnn embedding of the graph
-        gnn_embeddings = self.gcn(dgl.batch(G).to(self.device), node_inputs.to(self.device))
-        # compute the encoding of the commnd
-        encoded_command = self.command_fn(torch.tensor(command).to(self.device))
-        leaf_embeddings = []
-
-        # filter out the leaf nodes
-        prev = 0
-        current = 0
-        for g, l in zip(G, leaves):
-            current += g.number_of_nodes()
-            # seperate current graph
-            g_embeddings = gnn_embeddings[prev:current]
-            # filter out only the leaves and append to list
-            leaf_embeddings.append(g_embeddings[l])
-            # change the new prev
-            prev = current
-
-        # assign the graph embeddings with the current leaf embeddings
-        gnn_embeddings = torch.cat(leaf_embeddings)
-        # compute the product with command as per upside down RL and pass 
-        # it through the output function
-        product = torch.mul(gnn_embeddings, encoded_command)
-        return self.output_nn(product)
-    
     # Compute the action from a state and command
     # Note: this is only for computing a single action and not for training
     def action(self, state, command):
         G, node_inputs, leaf_nodes = state
+        predictions = self.forward(state, command)
+        return leaf_nodes[predictions.argmax().item()]
+
+    # Overloaded forward function
+    def forward(self, state, command):
+        G, node_inputs, leaf_nodes = state
         gnn_embeddings = self.gcn(G.to(self.device), node_inputs.to(self.device))
         encoded_command = self.command_fn(torch.FloatTensor(command).to(self.device))
-        product = torch.mul(gnn_embeddings, encoded_command)
-        product = self.output_nn(product)
-        return leaf_nodes[(product[leaf_nodes]).argmax().item()]
-
-    # Compute the best action based on the highest current probabilities
-    def greedy_action(self, state, command):
-        G, node_inputs, leaf_nodes = state
-        gnn_embeddings = self.get_gnn_embedding(G.to(self.device), node_inputs.to(self.device))
-        logits = self.forward(gnn_embeddings[leaf_nodes], command)
-        probs = F.softmax(logits)
-        return torch.argmax(probs).item()
+        product = torch.mul(gnn_embeddings[leaf_nodes], encoded_command)
+        return self.output_nn(product)
 
     # Get the random action for state
     def random_action(self, env:GraphWrapper, prob=50):
@@ -175,27 +146,18 @@ class Episode :
         self.time_steps += 1
         self.list.append(step)
 
-    def create_batch(self, observations):
-        graph_list = []; node_input_list = []
-        leaf_node_list = []; action_list = []; reward_sum = 0
-        for observation in observations:
-            G, node_inputs, leaf_nodes, action, reward = observation
-            graph_list.append(G)
-            node_input_list.append(node_inputs)
-            leaf_node_list.append(leaf_nodes)
-            action_list.append(torch.FloatTensor([int(action == leaf) for leaf in leaf_nodes]))
-            reward_sum += reward
-        action_list = torch.cat(action_list)
-        action_shape = action_list.shape
-        return graph_list, torch.cat(node_input_list), torch.reshape(action_list, (action_shape[0], 1)), leaf_node_list, reward_sum
-
     def sample(self):
         total_len = len(self.list)
         start = random.randint(0, total_len-2)
-        end = min(random.randint(start+1, start+201), total_len-1)
+        end = random.randint(start+1, total_len-1)
         horizon = end-start
-        graphs, inputs, actions, leaves, tot_reward = self.create_batch(self.list[start:end])
-        return graphs, inputs, actions, leaves, [tot_reward, horizon]
+        tot_rewards = 0
+        G, node_inputs, leaf_nodes, action, reward = self.list[start]
+        while start <= end:
+            tot_rewards += self.list[start][4]
+            start += 1
+        actions = torch.FloatTensor([int(action == leaf) for leaf in leaf_nodes]).reshape(1, len(leaf_nodes))
+        return G, node_inputs, actions, leaf_nodes, [tot_rewards, horizon]
 
     def __lt__(self, other):
         return self.total_reward > other.total_reward
@@ -213,7 +175,7 @@ class Memory:
     def add_episode(self, episode:Episode):
         self.buffer.append(episode)
         if len(self.buffer) > self.size:
-            self.buffer = np.random.choice(self.buffer, self.size, replace=False)
+            self.buffer = np.random.choice(self.buffer, self.size, replace=False).tolist()
         self.sort()
     
     def sample(self, batch_size):
@@ -249,8 +211,8 @@ class MetricLogger:
         self.save_log = save_dir + "/episodes_"+aggregator+"_"+version+".log"
         with open(self.save_log, "w") as f:
             f.write(
-                f"{'Episode':>8}{'Step':>8}{'Epsilon':>10}{'MeanReward':>15}"
-                f"{'MeanLength':>15}{'MeanLoss':>15}{'MeanQValue':>15}"
+                f"{'Episode':>8}{'MeanReward':>15}"
+                f"{'MeanLength':>15}{'MeanLoss':>15}"
                 f"{'TimeDelta':>15}{'Time':>20}\n"
             )
         self.ep_rewards_plot = save_dir + "/reward_plot_"+aggregator+"_"+version+".png"
@@ -273,14 +235,18 @@ class MetricLogger:
         # Timing
         self.record_time = time.time()
 
-    def log_step(self, reward, loss):
+    def log_step(self, reward, loss, policy):
+        if (policy == RANDOM):
+            return
         self.curr_ep_reward += reward
         self.curr_ep_length += 1
         if loss:
             self.curr_ep_loss += loss
             self.curr_ep_loss_length += 1
 
-    def log_episode(self):
+    def log_episode(self, policy):
+        if (policy == RANDOM):
+            return
         "Mark end of episode"
         self.ep_rewards.append(self.curr_ep_reward)
         self.ep_lengths.append(self.curr_ep_length)
@@ -298,7 +264,9 @@ class MetricLogger:
         self.curr_ep_loss = 0.0
         self.curr_ep_loss_length = 0
 
-    def record(self, episode):
+    def record(self, episode, policy):
+        if (policy == RANDOM):
+            return
         mean_ep_reward = np.round(np.mean(self.ep_rewards[-100:]), 6)
         mean_ep_length = np.round(np.mean(self.ep_lengths[-100:]), 6)
         mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-100:]), 6)
@@ -321,7 +289,7 @@ class MetricLogger:
         with open(self.save_log, "a") as f:
             f.write(
                 f"{episode:8d}{mean_ep_reward:10.3f}{mean_ep_length:10.3f}"
-                f"{time_since_last_record:15.3f}"
+                f"{mean_ep_loss:10.3f}{time_since_last_record:15.3f}"
                 f"{datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S'):>20}\n"
             )
 
@@ -336,18 +304,20 @@ class MetricLogger:
 
 class Trainer : 
 
-    def __init__(self, device, optimizer=Adam, lr=0.003, mem_size=50, aggregator="pool") -> None:
+    def __init__(self, device, optimizer=Adam, lr=0.003, mem_size=50, aggregator="pool", version=0) -> None:
         self.memory = Memory(size=mem_size)
         self.behaviour = Behaviour(device=device, aggregator=aggregator)
         self.env = GraphWrapper()
         self.optimizer = optimizer(self.behaviour.parameters(), lr=lr)
         self.device = device
-        self.logger = MetricLogger(aggregator=aggregator)
+        self.logger = MetricLogger(aggregator=aggregator, version=str(version))
         self.mem_size = mem_size
         self.current_iteration = 0
+        self.version = version
+        self.loss_fn = nn.CrossEntropyLoss()
         print("Generating training data")
         for i in range(round(mem_size/2)):
-            self.memory.add_episode(self.run_episode(max_steps=3000))
+            self.memory.add_episode(self.run_episode(max_steps=1000))
             print("Added episode to memory :", i)
         print("completed generating training data")
 
@@ -365,11 +335,6 @@ class Trainer :
         loss = -1
         total_reward = 0
 
-        if policy != RANDOM:
-            command = self.memory.get_possible_command(count=round(self.mem_size/2))
-            loss = self.train_batch(10, 10)
-            self.behaviour.save("scheduling_"+str(self.current_iteration)+".pt")
-
         print("Started episode")
         
         self.logger.init_episode()
@@ -381,7 +346,9 @@ class Trainer :
                 index = self.behaviour.random_action(self.env, prob=assist)
                 action = (index, 1)
             else :
-                index = self.behaviour.action(state, command)
+                des_command = self.memory.get_possible_command(count=5)
+                loss = self.train_batch(steps=5, batch_size=5)
+                index = self.behaviour.action(state, des_command)
                 action =  (index, 1)
 
             next_state, reward, done = self.env.step(action, False)
@@ -397,40 +364,51 @@ class Trainer :
             command[1] = max(command[1]-1, 1)               # desired time frame
             steps += 1
             total_reward += reward
-            self.logger.log_step(reward, loss)
+            self.logger.log_step(reward, loss, policy=policy)
         
-        self.logger.log_episode()
-        self.logger.record(episode=self.current_iteration)
-        self.current_iteration += 1
+        self.logger.log_episode(policy=policy)
+        self.logger.record(episode=self.current_iteration, policy=policy)
+        if loss >= 0:
+            self.behaviour.save("scheduling_"+str(self.version)+"_"+str(self.current_iteration)+".pt")
+            self.current_iteration += 1
         
-        print("Ended episode | Done : ", done, " Steps : ", steps, " Reward :", total_reward, " Loss: ", loss)
+        print("Ended episode | Done : ", done, " | Steps : ", steps, " | Reward :", total_reward, " | Loss: ", loss)
         return episode
 
-    def train_batch(self, steps:int, batch_size=10):
+    def train_batch(self, steps=1, batch_size=5):
         loss_total = 0
-        print("Started training")
         for step in range(steps):
             episodes = self.memory.sample(min(self.mem_size, batch_size))
             for episode in episodes:
                 graphs, inputs, actions, leaves, command = episode.sample()
-                new_predictions = self.behaviour(graphs, inputs, leaves, command)
-                loss = F.cross_entropy(new_predictions, actions.to(self.device))
                 self.optimizer.zero_grad()
+                predictions = self.behaviour((graphs, inputs, leaves), command)
+                loss = self.loss_fn(predictions.reshape(1, len(leaves)), actions.to(self.device))
                 loss.backward()
                 self.optimizer.step()
                 loss_total += loss.item()
-            print("  Update Complete :", step)
-        print("Training batch complete")
         return loss_total
 
-    def run_udrl(self, iterations=100, fileName="firstRun.pt"):
+    def run_udrl(self, iterations=500, max_steps=20000, fileName="firstRun.pt"):
         for i in range(iterations):
-            episode = self.run_episode(policy=BEHAVIOUR_ACT)
+            command = self.memory.get_possible_command(count=5)
+            policy = RANDOM; assist = 50
+            if i % 40 == 0:
+                policy = RANDOM; assist = 10
+            elif i % 25 == 0:
+                policy = RANDOM; assist = 25
+            elif i % 5 == 0:
+                policy = RANDOM; assist = 50
+            else :
+                policy = BEHAVIOUR_ACT; assist = 50
+            episode = self.run_episode(policy=policy, max_steps=max_steps,
+                 init_command=command, assist=assist)
             self.memory.add_episode(episode)
 
 
-trainer = Trainer(device='cuda')
-trainer.run_udrl()
+trainer = Trainer(device='cuda', mem_size=25, version=0)
+# trainer.train_batch(steps=1, batch_size=2)
+trainer.run_udrl(iterations=100)
 
 
 
