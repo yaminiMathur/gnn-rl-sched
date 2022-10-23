@@ -1,22 +1,16 @@
 ### Import Libraries
-from asyncio.log import logger
-from dataclasses import replace
-from email import policy
 from typing import List, Tuple
 import warnings
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import Adam
-from torch.distributions import Categorical
-from numpy import array, load
 import random
 from environment_wrapper import *
 from dgl.nn.pytorch import SAGEConv
-import dgl
 import numpy as np
 import datetime
 from matplotlib import pyplot as plt
+import pickle
 
 warnings.filterwarnings("ignore")
 
@@ -80,8 +74,6 @@ class Behaviour(nn.Module):
             nn.Sigmoid(),
             nn.Linear(32, 32),
             nn.Sigmoid(),
-            nn.Linear(32, 32),
-            nn.Sigmoid(),
             nn.Linear(32, 1),
             nn.Sigmoid()
         ).to(device)
@@ -112,20 +104,20 @@ class Behaviour(nn.Module):
         return self.output_nn(product)
 
     # Get the random action for state
-    def random_action(self, env:GraphWrapper, prob=50):
+    def random_action(self, env:GraphWrapper, assist_probability=50):
         G, node_inputs, leaf_nodes = env.observe()
         action = leaf_nodes[(random.randint(0, len(leaf_nodes)-1))]
-        if random.randint(0, 100-1) < prob :
+        if random.randint(0, 100-1) < assist_probability :
             action = env.auto_step()
         return action
 
     # save the model parameters
     def save(self, filename):
-        torch.save(self.state_dict, "./models/behaviour_"+filename)
+        torch.save(self.state_dict(), "./models/behaviour_"+filename)
     
     # load model parameters
     def load(self, filename):
-        self.state_dict(torch.load("behaviour_"+filename))
+        self.state_dict(torch.load("./models/behaviour_"+filename))
 
 # -----------------------------------------------------------------------------------------------------
 
@@ -148,14 +140,10 @@ class Episode :
 
     def sample(self):
         total_len = len(self.list)
-        start = random.randint(0, total_len-2)
-        end = random.randint(start+1, total_len-1)
+        start = random.randint(0, total_len-2); end = random.randint(start+1, total_len-1)
         horizon = end-start
-        tot_rewards = 0
         G, node_inputs, leaf_nodes, action, reward = self.list[start]
-        while start <= end:
-            tot_rewards += self.list[start][4]
-            start += 1
+        tot_rewards = sum([observation[4] for observation in self.list[start:end+1]])
         actions = torch.FloatTensor([int(action == leaf) for leaf in leaf_nodes]).reshape(1, len(leaf_nodes))
         return G, node_inputs, actions, leaf_nodes, [tot_rewards, horizon]
 
@@ -168,24 +156,26 @@ class Episode :
 ### Replay Buffer for episodes
 class Memory:
 
-    def __init__(self, size=0):
-        self.size = size
+    def __init__(self, load_file=None, load_version=0):
+        
         self.buffer = []
+        if load_file:
+            print("Loading warmup data file..")
+            self.load(load_file, load_version)
         
     def add_episode(self, episode:Episode):
         self.buffer.append(episode)
-        if len(self.buffer) > self.size:
-            self.buffer = np.random.choice(self.buffer, self.size, replace=False).tolist()
         self.sort()
     
     def sample(self, batch_size):
+        batch_size = min(len(self.buffer), batch_size)
         return np.random.choice(self.buffer, 
             size=min(batch_size, len(self.buffer)-1), replace=False)
 
     def get_possible_command(self, count=10):
         rewards = []
         steps = []
-        for episode in self.buffer[-(min(count, self.size)):]:
+        for episode in self.buffer[-(min(count, len(self.buffer))):]:
             rewards.append(episode.total_reward)
             steps.append(episode.time_steps)
         
@@ -199,6 +189,16 @@ class Memory:
     def sort(self):
         self.buffer.sort()
     
+    def load(self, data_file, load_version):
+        print("loading training data")
+        with open("./warmup/"+data_file+"_"+str(load_version)+".dat", "rb") as f:
+            self.buffer = pickle.load(f)
+        
+    def save(self, version):
+        print("Saving Training Data")
+        with open("./warmup/warmup_"+str(version)+".dat", "wb") as f:
+            pickle.dump(self.buffer, f)
+
     def __len__(self):
         return len(self.buffer)
 
@@ -218,6 +218,7 @@ class MetricLogger:
         self.ep_rewards_plot = save_dir + "/reward_plot_"+aggregator+"_"+version+".png"
         self.ep_lengths_plot = save_dir + "/length_plot_"+aggregator+"_"+version+".png"
         self.ep_avg_losses_plot = save_dir + "/loss_plot_"+aggregator+"_"+version+".png"
+        self.episode = 1
 
         # History metrics
         self.ep_rewards = []
@@ -235,41 +236,28 @@ class MetricLogger:
         # Timing
         self.record_time = time.time()
 
-    def log_step(self, reward, loss, policy):
-        if (policy == RANDOM):
-            return
+    def log_step(self, reward, loss):
         self.curr_ep_reward += reward
         self.curr_ep_length += 1
-        if loss:
-            self.curr_ep_loss += loss
-            self.curr_ep_loss_length += 1
+        self.curr_ep_loss += loss
 
-    def log_episode(self, policy):
-        if (policy == RANDOM):
-            return
-        "Mark end of episode"
+    def log_episode(self):
         self.ep_rewards.append(self.curr_ep_reward)
         self.ep_lengths.append(self.curr_ep_length)
-        if self.curr_ep_loss_length == 0:
-            ep_avg_loss = 0
-        else:
-            ep_avg_loss = np.round(self.curr_ep_loss / self.curr_ep_loss_length, 5)
+        ep_avg_loss = np.round(self.curr_ep_loss / self.curr_ep_length, 5)
         self.ep_avg_losses.append(ep_avg_loss)
-
+        self.episode += 1
         self.init_episode()
 
     def init_episode(self):
         self.curr_ep_reward = 0.0
         self.curr_ep_length = 0
         self.curr_ep_loss = 0.0
-        self.curr_ep_loss_length = 0
 
-    def record(self, episode, policy):
-        if (policy == RANDOM):
-            return
-        mean_ep_reward = np.round(np.mean(self.ep_rewards[-100:]), 6)
-        mean_ep_length = np.round(np.mean(self.ep_lengths[-100:]), 6)
-        mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-100:]), 6)
+    def record(self):
+        mean_ep_reward = np.round(np.mean(self.ep_rewards[-10:]), 6)
+        mean_ep_length = np.round(np.mean(self.ep_lengths[-10:]), 6)
+        mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-10:]), 6)
         self.moving_avg_ep_rewards.append(mean_ep_reward)
         self.moving_avg_ep_lengths.append(mean_ep_length)
         self.moving_avg_ep_avg_losses.append(mean_ep_loss)
@@ -279,7 +267,7 @@ class MetricLogger:
         time_since_last_record = np.round(self.record_time - last_record_time, 3)
 
         print(
-            f"Episode :  {episode} \n"
+            f"Episode :  {self.episode} \n"
             f"Mean Reward :  {mean_ep_reward} \n"
             f"Mean Length :  {mean_ep_length} \n"
             f"Mean Loss :  {mean_ep_loss} \n"
@@ -288,8 +276,8 @@ class MetricLogger:
 
         with open(self.save_log, "a") as f:
             f.write(
-                f"{episode:8d}{mean_ep_reward:10.3f}{mean_ep_length:10.3f}"
-                f"{mean_ep_loss:10.3f}{time_since_last_record:15.3f}"
+                f"{self.episode:8d}{mean_ep_reward:15.3f}{mean_ep_length:15.3f}"
+                f"{mean_ep_loss:15.3f}{time_since_last_record:15.3f}"
                 f"{datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S'):>20}\n"
             )
 
@@ -304,81 +292,105 @@ class MetricLogger:
 
 class Trainer : 
 
-    def __init__(self, device, optimizer=Adam, lr=0.003, mem_size=50, aggregator="pool", version=0) -> None:
-        self.memory = Memory(size=mem_size)
+    def __init__(self, device, optimizer=Adam, lr=0.00001, aggregator="pool", 
+                 version=0, assist=100, nn_file=None, data_file=None, 
+                 episode_stop=10000, data_version=0, warmup_ep=10) -> None:
+        
+        # initialize the objects required
+        self.memory = Memory(data_file, data_version)
         self.behaviour = Behaviour(device=device, aggregator=aggregator)
+        self.logger = MetricLogger(aggregator=aggregator, version=str(version))
         self.env = GraphWrapper()
+        self.loss_fn = nn.CrossEntropyLoss()
+        
+        # if file is given as arg then load trained weights
+        if nn_file:
+            self.behaviour.load(nn_file)
+            
         self.optimizer = optimizer(self.behaviour.parameters(), lr=lr)
         self.device = device
-        self.logger = MetricLogger(aggregator=aggregator, version=str(version))
-        self.mem_size = mem_size
-        self.current_iteration = 0
+        self.aggregator = aggregator
         self.version = version
-        self.loss_fn = nn.CrossEntropyLoss()
-        print("Generating training data")
-        for i in range(round(mem_size/2)):
-            self.memory.add_episode(self.run_episode(max_steps=1000))
-            print("Added episode to memory :", i)
-        print("completed generating training data")
+        self.episode_stop = episode_stop
+        self.assist_probability = assist
+        
+        # load generated training data if file is already present
+        if not data_file:
+            self.generate_warmup_data(warmup_ep, data_version)
+            
+    def generate_warmup_data(self, warmup_ep, data_version) :
+        print("Generating warmup data")
+        for i in range(warmup_ep):
+            
+            # init episode details
+            episode = Episode(init_command=[1, 1])
+            self.env.reset(random.randint(1, 100000))
+            done = False
+            
+            # run the episode with random actions
+            while not done and episode.time_steps < self.episode_stop:
+                state = self.env.observe() 
+                index = self.behaviour.random_action(self.env, self.assist_probability)
+                next_state, reward, done = self.env.step((index, 1), False)
+                if done:
+                    reward = 50
+                G, node_inputs, leaf_nodes = state
+                episode.add_iteration([G, node_inputs, leaf_nodes, index, reward])
 
-    def run_episode(self, policy=RANDOM, init_command=[1, 1], seed=None, max_steps=1000, assist=50):
-        episode = Episode(init_command=init_command)
-        command = init_command.copy()
+            # add episode to memory
+            print("Ended episode | Done : ", done, " | Steps : ", episode.time_steps, " | Reward :", episode.total_reward)
+            self.memory.add_episode(episode)
+        
+        self.memory.save(str(data_version))
+
+    def run_episode(self, iteration, command=[1, 1], seed=None, train_params={"steps":5, "batch": 5}):
+        
+        # init seed if not initialized already
         if not seed :
             seed = random.randint(1, 100000)
-        
-        print("Seed : ", seed)
+
+        # init the episode params
+        episode = Episode(init_command=command)
         self.env.reset(seed)
         state = self.env.observe()
-        done = False
-        steps = 0
-        loss = -1
-        total_reward = 0
-
-        print("Started episode")
-        
         self.logger.init_episode()
-        while not done and  steps < max_steps:
-
-            index = None
-            action = None
-            if policy == RANDOM :
-                index = self.behaviour.random_action(self.env, prob=assist)
-                action = (index, 1)
-            else :
-                des_command = self.memory.get_possible_command(count=5)
-                loss = self.train_batch(steps=5, batch_size=5)
-                index = self.behaviour.action(state, des_command)
-                action =  (index, 1)
-
-            next_state, reward, done = self.env.step(action, False)
-            if episode.time_steps > max_steps :
+        done = False; loss = 0
+        
+        while not done and  episode.time_steps < self.episode_stop:
+            
+            loss = self.train_batch(steps=train_params["steps"], batch_size=train_params["batch"])
+            index = self.behaviour.action(state, command)
+            next_state, reward, done = self.env.step((index, 1), False)
+            
+            if done:
+                reward = 50
+            elif episode.time_steps > self.episode_stop :
                 done = True
                 reward = MAX_STEPS_REWARD
             
             G, node_inputs, leaf_nodes = state  
             episode.add_iteration([G, node_inputs, leaf_nodes, index, reward])
-
-            state = next_state
+            
+            state = next_state                              # next state
             command[0] = min(command[0]-reward, MAX_REWARD) # desired reward
             command[1] = max(command[1]-1, 1)               # desired time frame
-            steps += 1
-            total_reward += reward
-            self.logger.log_step(reward, loss, policy=policy)
+
+            self.logger.log_step(reward, loss)
+            # if episode.time_steps % 293 == 0:
+            #     self.logger.log_episode()
+            #     self.logger.record()
         
-        self.logger.log_episode(policy=policy)
-        self.logger.record(episode=self.current_iteration, policy=policy)
-        if loss >= 0:
-            self.behaviour.save("scheduling_"+str(self.version)+"_"+str(self.current_iteration)+".pt")
-            self.current_iteration += 1
+        print("Ended episode | Done : ", done, " | Steps : ", episode.time_steps, " | Reward :", episode.total_reward, " | Loss: ", self.logger.curr_ep_loss)
+        self.logger.log_episode()
+        self.logger.record()
+        self.behaviour.save("scheduling_"+str(self.version)+"_"+str(iteration)+"_"+self.aggregator+".pt")
         
-        print("Ended episode | Done : ", done, " | Steps : ", steps, " | Reward :", total_reward, " | Loss: ", loss)
         return episode
 
     def train_batch(self, steps=1, batch_size=5):
         loss_total = 0
         for step in range(steps):
-            episodes = self.memory.sample(min(self.mem_size, batch_size))
+            episodes = self.memory.sample(batch_size)
             for episode in episodes:
                 graphs, inputs, actions, leaves, command = episode.sample()
                 self.optimizer.zero_grad()
@@ -389,29 +401,14 @@ class Trainer :
                 loss_total += loss.item()
         return loss_total
 
-    def run_udrl(self, iterations=500, max_steps=20000, fileName="firstRun.pt"):
+    def run_udrl(self, iterations=100, command_batch=5):
         for i in range(iterations):
-            command = self.memory.get_possible_command(count=5)
-            policy = RANDOM; assist = 50
-            if i % 40 == 0:
-                policy = RANDOM; assist = 10
-            elif i % 25 == 0:
-                policy = RANDOM; assist = 25
-            elif i % 5 == 0:
-                policy = RANDOM; assist = 50
-            else :
-                policy = BEHAVIOUR_ACT; assist = 50
-            episode = self.run_episode(policy=policy, max_steps=max_steps,
-                 init_command=command, assist=assist)
+            command = self.memory.get_possible_command(count=command_batch)
+            episode = self.run_episode(i, command=command.copy())
             self.memory.add_episode(episode)
 
+trainer = Trainer(device='cuda', lr=0.00001, aggregator="mean", 
+                  version=6, assist=100, nn_file=None,
+                 data_file="warmup", episode_stop=10000, data_version=0, warmup_ep=10)
 
-trainer = Trainer(device='cuda', mem_size=25, version=0)
-# trainer.train_batch(steps=1, batch_size=2)
-trainer.run_udrl(iterations=100)
-
-
-
-# chnages
-
-# removed sigmoid from the embedding function
+trainer.run_udrl(iterations=20, command_batch=5)
