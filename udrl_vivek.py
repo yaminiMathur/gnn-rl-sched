@@ -1,4 +1,5 @@
 ### Import Libraries
+from base64 import encode
 from typing import List, Tuple
 import warnings
 import torch
@@ -43,7 +44,7 @@ class GCN(nn.Module):
     def forward(self, g, inputs):
         h = inputs
         h = self.conv1(g, h)
-        h = torch.sigmoid(h)
+        h = torch.tanh(h)
         h = self.conv2(g, h)
         return h
         # return torch.sigmoid(h)
@@ -71,11 +72,11 @@ class Behaviour(nn.Module):
         # Output function
         self.output_nn = nn.Sequential(
             nn.Linear(embedding_size, 32),
-            nn.Sigmoid(),
+            nn.Tanh(),
             nn.Linear(32, 32),
-            nn.Sigmoid(),
+            nn.Tanh(),
             nn.Linear(32, 1),
-            nn.Sigmoid()
+            nn.Tanh()
         ).to(device)
     
     #  Neural Network -
@@ -93,13 +94,15 @@ class Behaviour(nn.Module):
     def action(self, state, command):
         G, node_inputs, leaf_nodes = state
         predictions = self.forward(state, command)
-        return leaf_nodes[predictions.argmax().item()]
+        index = leaf_nodes[predictions.argmax().item()]
+        return index
 
     # Overloaded forward function
     def forward(self, state, command):
         G, node_inputs, leaf_nodes = state
         gnn_embeddings = self.gcn(G.to(self.device), node_inputs.to(self.device))
-        encoded_command = self.command_fn(torch.FloatTensor(command).to(self.device))
+        command_input = torch.FloatTensor(command).to(self.device) * 0.0001
+        encoded_command = self.command_fn(command_input)
         product = torch.mul(gnn_embeddings[leaf_nodes], encoded_command)
         return self.output_nn(product)
 
@@ -113,11 +116,15 @@ class Behaviour(nn.Module):
 
     # save the model parameters
     def save(self, filename):
-        torch.save(self.state_dict(), "./models/behaviour_"+filename)
+        torch.save(self.gcn.state_dict(), "./models/behaviour_gcn_"+filename)
+        torch.save(self.command_fn.state_dict(), "./models/behaviour_cfn_"+filename)
+        torch.save(self.output_nn.state_dict(), "./models/behaviour_nn_"+filename)
     
     # load model parameters
     def load(self, filename):
-        self.state_dict(torch.load("./models/behaviour_"+filename))
+        self.gcn.load_state_dict(torch.load("./models/behaviour_gcn_"+filename))
+        self.command_fn.load_state_dict(torch.load("./models/behaviour_cfn_"+filename))
+        self.output_nn.load_state_dict(torch.load("./models/behaviour_nn_"+filename))
 
 # -----------------------------------------------------------------------------------------------------
 
@@ -144,7 +151,13 @@ class Episode :
         horizon = end-start
         G, node_inputs, leaf_nodes, action, reward = self.list[start]
         tot_rewards = sum([observation[4] for observation in self.list[start:end+1]])
-        actions = torch.FloatTensor([int(action == leaf) for leaf in leaf_nodes]).reshape(1, len(leaf_nodes))
+        actions = []
+        for leaf in leaf_nodes:
+            if action == leaf:
+                actions.append(1)
+            else:
+                actions.append(-1)
+        actions = torch.FloatTensor(actions).reshape(1, len(leaf_nodes))
         return G, node_inputs, actions, leaf_nodes, [tot_rewards, horizon]
 
     def __lt__(self, other):
@@ -173,12 +186,10 @@ class Memory:
             size=min(batch_size, len(self.buffer)-1), replace=False)
 
     def get_possible_command(self, count=10):
-        rewards = []
-        steps = []
-        for episode in self.buffer[-(min(count, len(self.buffer))):]:
+        rewards = []; steps = []
+        for episode in self.buffer[:(min(count, len(self.buffer)))]:
             rewards.append(episode.total_reward)
             steps.append(episode.time_steps)
-        
         possible_horizon = np.mean(steps)
         rewards_std = min(np.std(rewards), 1)
         rewards_mean = np.mean(rewards)
@@ -193,6 +204,7 @@ class Memory:
         print("loading training data")
         with open("./warmup/"+data_file+"_"+str(load_version)+".dat", "rb") as f:
             self.buffer = pickle.load(f)
+        self.sort()
         
     def save(self, version):
         print("Saving Training Data")
@@ -207,6 +219,7 @@ class Memory:
 class MetricLogger:
 
     def __init__(self, save_dir="./results", mode="train", version="0", aggregator="mean"):
+        self.mode = mode
         save_dir = save_dir+"/"+mode
         self.save_log = save_dir + "/episodes_"+aggregator+"_"+version+".log"
         with open(self.save_log, "w") as f:
@@ -251,16 +264,19 @@ class MetricLogger:
 
     def init_episode(self):
         self.curr_ep_reward = 0.0
-        self.curr_ep_length = 0
+        self.curr_ep_length = 1
         self.curr_ep_loss = 0.0
 
-    def record(self):
+    def record(self, eval=False):
         mean_ep_reward = np.round(np.mean(self.ep_rewards[-10:]), 6)
         mean_ep_length = np.round(np.mean(self.ep_lengths[-10:]), 6)
-        mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-10:]), 6)
         self.moving_avg_ep_rewards.append(mean_ep_reward)
         self.moving_avg_ep_lengths.append(mean_ep_length)
-        self.moving_avg_ep_avg_losses.append(mean_ep_loss)
+        if self.mode == "train":
+            mean_ep_loss = np.round(np.mean(self.ep_avg_losses[-10:]), 6)
+            self.moving_avg_ep_avg_losses.append(mean_ep_loss)
+        else:
+            mean_ep_loss = 0
 
         last_record_time = self.record_time
         self.record_time = time.time()
@@ -292,19 +308,21 @@ class MetricLogger:
 
 class Trainer : 
 
-    def __init__(self, device, optimizer=Adam, lr=0.00001, aggregator="pool", 
+    def __init__(self, device, optimizer=Adam, lr=0.00001, aggregator="mean", 
                  version=0, assist=100, nn_file=None, data_file=None, 
-                 episode_stop=10000, data_version=0, warmup_ep=10) -> None:
+                 episode_stop=10000, data_version=0, warmup_ep=10, mode="train") -> None:
         
         # initialize the objects required
-        self.memory = Memory(data_file, data_version)
+        if mode == "train":
+            self.memory = Memory(data_file, data_version)
         self.behaviour = Behaviour(device=device, aggregator=aggregator)
-        self.logger = MetricLogger(aggregator=aggregator, version=str(version))
+        self.logger = MetricLogger(aggregator=aggregator, version=str(version), mode=mode)
         self.env = GraphWrapper()
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.loss_fn = nn.SmoothL1Loss()
         
         # if file is given as arg then load trained weights
         if nn_file:
+            print("loading nn weights file")
             self.behaviour.load(nn_file)
             
         self.optimizer = optimizer(self.behaviour.parameters(), lr=lr)
@@ -313,9 +331,10 @@ class Trainer :
         self.version = version
         self.episode_stop = episode_stop
         self.assist_probability = assist
+        self.mode = mode
         
         # load generated training data if file is already present
-        if not data_file:
+        if not data_file and mode == "train":
             self.generate_warmup_data(warmup_ep, data_version)
             
     def generate_warmup_data(self, warmup_ep, data_version) :
@@ -343,7 +362,20 @@ class Trainer :
         
         self.memory.save(str(data_version))
 
-    def run_episode(self, iteration, command=[1, 1], seed=None, train_params={"steps":5, "batch": 5}):
+    def temp(self, seeds, command=[-3550.2, 4966.0]):
+        for seed in seeds:
+            self.env.reset(seed)
+            done = False
+            rewards = 0; steps = 0
+            while not done:
+                state = self.env.observe() 
+                index = self.behaviour.action(state=state, command=command)
+                next_state, reward, done = self.env.step((index, 1), False)
+                state = next_state
+                steps += 1; rewards += reward
+            print("Steps: ", steps, " Reward: ", rewards)
+
+    def run_episode(self, iteration, command=[1, 1], seed=None, train_params={"steps":5, "batch": 10}, mod=83):
         
         # init seed if not initialized already
         if not seed :
@@ -357,13 +389,17 @@ class Trainer :
         done = False; loss = 0
         
         while not done and  episode.time_steps < self.episode_stop:
-            
-            loss = self.train_batch(steps=train_params["steps"], batch_size=train_params["batch"])
+            # Run training only if enabled
+            if self.mode == "train" :
+                loss = self.train_batch(steps=train_params["steps"], batch_size=train_params["batch"])
+
+            # Get the action from behaviour
             index = self.behaviour.action(state, command)
+            # take the next step using action
             next_state, reward, done = self.env.step((index, 1), False)
             
             if done:
-                reward = 50
+                reward = 50/mod
             elif episode.time_steps > self.episode_stop :
                 done = True
                 reward = MAX_STEPS_REWARD
@@ -376,39 +412,66 @@ class Trainer :
             command[1] = max(command[1]-1, 1)               # desired time frame
 
             self.logger.log_step(reward, loss)
-            # if episode.time_steps % 293 == 0:
-            #     self.logger.log_episode()
-            #     self.logger.record()
+            if episode.time_steps % mod == 0:
+                self.logger.log_episode()
+                self.logger.record()
         
-        print("Ended episode | Done : ", done, " | Steps : ", episode.time_steps, " | Reward :", episode.total_reward, " | Loss: ", self.logger.curr_ep_loss)
-        self.logger.log_episode()
-        self.logger.record()
-        self.behaviour.save("scheduling_"+str(self.version)+"_"+str(iteration)+"_"+self.aggregator+".pt")
+        print("---------------------------------------------------------------------------------------------------------------")
+        print("Ended episode | Done : ", done, " | Steps : ", episode.time_steps, " | Reward :", episode.total_reward, " |")
+        if self.mode == "train":
+            self.behaviour.save("scheduling_"+str(self.version)+"_"+str(iteration)+"_"+self.aggregator+".pt")
+        else:
+            self.logger.log_episode()
+            self.logger.record()
+        print("---------------------------------------------------------------------------------------------------------------")
         
         return episode
 
     def train_batch(self, steps=1, batch_size=5):
         loss_total = 0
+        self.optimizer.zero_grad()
         for step in range(steps):
             episodes = self.memory.sample(batch_size)
             for episode in episodes:
                 graphs, inputs, actions, leaves, command = episode.sample()
-                self.optimizer.zero_grad()
                 predictions = self.behaviour((graphs, inputs, leaves), command)
                 loss = self.loss_fn(predictions.reshape(1, len(leaves)), actions.to(self.device))
                 loss.backward()
-                self.optimizer.step()
                 loss_total += loss.item()
+        self.optimizer.step()
         return loss_total
 
-    def run_udrl(self, iterations=100, command_batch=5):
+    def train_udrl(self, iterations=100, command_batch=5, mod=83):
+        if self.mode != "train":
+            print("Mode train not enabled")
+            return
         for i in range(iterations):
             command = self.memory.get_possible_command(count=command_batch)
-            episode = self.run_episode(i, command=command.copy())
+            print("Command: ", command)
+            episode = self.run_episode(i, command=command.copy(), mod=mod)
             self.memory.add_episode(episode)
 
-trainer = Trainer(device='cuda', lr=0.00001, aggregator="mean", 
-                  version=6, assist=100, nn_file=None,
-                 data_file="warmup", episode_stop=10000, data_version=0, warmup_ep=10)
+    def test_udrl(self, seeds=None, command=[-1766.31, 4258.0], iterations=10):
+        if self.mode != "test":
+            print("Mode test not enabled")
+            return
+        if seeds and len(seeds) > 0:
+            for seed in seeds:
+                self.run_episode(None, command=command.copy(), seed=seed, mod=97131)
+        else:
+            for i in range(iterations):
+                self.run_episode(None, command=command, mod=97131)
 
-trainer.run_udrl(iterations=20, command_batch=5)
+
+trainer = Trainer(device='cuda', lr=0.0001, aggregator="mean", 
+                  version=3, assist=100, nn_file="scheduling_0_15_mean.pt",
+                 data_file="warmup", episode_stop=10000, data_version=1, warmup_ep=5, mode="test")
+
+# trainer.train_udrl(iterations=30, command_batch=5, mod=971)
+trainer.test_udrl(seeds=[8269, 21343, 20362, 7177, 11827, 29809, 22636, 52574, 29671, 76432], command=[-1766.31, 4258.0], iterations=10)
+
+# bad 39275, 37489, 99199, 48974
+# good 8540, 63, 27528, 30936, 89737, 74072, 20615
+# command [-1766.31, 4258.0]
+
+# [8269, 21343, 20362, 7177, 11827, 29809, 22636, 52574, 29671, 76432]
