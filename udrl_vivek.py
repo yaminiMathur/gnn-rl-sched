@@ -12,6 +12,7 @@ import numpy as np
 import datetime
 from matplotlib import pyplot as plt
 import pickle
+from spark_env.canvas import *
 
 warnings.filterwarnings("ignore")
 
@@ -455,23 +456,37 @@ class Trainer :
         if self.mode != "test":
             print("Mode test not enabled")
             return
+
+        rewards = []
         if seeds and len(seeds) > 0:
             for seed in seeds:
-                self.run_episode(None, command=command.copy(), seed=seed, mod=97131)
+                ep = self.run_episode(None, command=command.copy(), seed=seed, mod=97131)
+                rewards.append(ep.total_reward)
         else:
             for i in range(iterations):
-                self.run_episode(None, command=command, mod=97131)
+                ep = self.run_episode(None, command=command, mod=97131)
+                rewards.append(ep.total_reward)
 
 
-trainer = Trainer(device='cuda', lr=0.0001, aggregator="mean", 
-                  version=3, assist=100, nn_file="scheduling_0_15_mean.pt",
+trainer = Trainer(device='cuda', lr=0.0001, aggregator="pool", 
+                  version=4, assist=100, nn_file="scheduling_0_15_mean.pt",
                  data_file="warmup", episode_stop=10000, data_version=1, warmup_ep=5, mode="test")
 
 # trainer.train_udrl(iterations=30, command_batch=5, mod=971)
-trainer.test_udrl(seeds=[8269, 21343, 20362, 7177, 11827, 29809, 22636, 52574, 29671, 76432], command=[-1766.31, 4258.0], iterations=10)
+# rewards_agent = trainer.test_udrl(seeds=[8738,  9029, 182, 9832, 9335, 3162, 10212, 10523, 12083, 1380, 887, 1304, 6905, 7318, 7634, 4422, 5597, 8190, 10023, 11435, 7639, 3308, 12014, 906, 6027], command=[-1766.31, 4258.0], iterations=10)
 
 # bad 39275, 37489, 99199, 48974
 # good 8540, 63, 27528, 30936, 89737, 74072, 20615
 # command [-1766.31, 4258.0]
-
+# rewards = [-2154.8774052312947, -1931.780895231288, -2017.0316652312838, -2112.078095231291, -1730.5866652312884, -1999.6980752312875, 
+# -1969.3478252312884, -1951.503895231288, -2159.8426852312887, -1942.3891852312859, -1818.0233052312856, -1968.6096452312886, 
+# -1777.4090852312838, -1939.295495231286, -1655.6918252312914, -1984.1382352312835, -1743.5982152312804, -1969.0987052312855, 
+# -1828.7822852312831, -1899.5916252312868, -2001.2381452312852, -2020.4300052312885, -1651.0074752312862, -2200.3019452312874, -1940.821715231284]
 # [8269, 21343, 20362, 7177, 11827, 29809, 22636, 52574, 29671, 76432]
+# fig = plt.figure()
+# ax = fig.add_subplot(111)
+# x, y = compute_CDF(rewards)
+# ax.plot(x, y, color="red", label="UDRL Sched")
+# plt.xlabel('Total reward')
+# plt.ylabel('CDF')
+# fig.savefig('./results/cdf_combined_pool_1.png')
