@@ -340,7 +340,7 @@ class MetricLogger:
         subplot.plot(x, y, color="red", label="UDRL Sched")
         plt.xlabel('Total reward')
         plt.ylabel('CDF')
-        figure.savefig(self.save_dir+'/cdf_'+aggregator+'_'+version+'.png')
+        figure.savefig(self.save_dir+'/cdf_'+aggregator+'_'+str(version)+'.png')
         
 
 # ---------------------------------------------------------------------------------------------------------
@@ -514,9 +514,9 @@ class Trainer :
 
 # neural network params
 nn_aggregator = "mean"
-nn_version = 2
+nn_version = 3
 nn_device = "cuda"
-nn_file = "scheduling_2_5_mean.pt"
+nn_file = "scheduling_2_3_mean.pt"
 train_episodes = 10
 
 # warmup parameters
