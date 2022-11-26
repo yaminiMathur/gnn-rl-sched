@@ -14,7 +14,7 @@ class Args() :
         self.num_stream_dags_grow = 0.2
         self.stream_interval = 1000 # change to 1
         self.new_dag_interval = 1000 # not used anywhere
-        self.warmup_delay = 1000
+        self.warmup_delay = 1000 # node warmup delay keep 1000
         self.learn_obj = 'mean' # makespan
         self.reward_scale = 100000.0
         self.cuda = "cuda"
